@@ -97,14 +97,14 @@ def test_main_dispatches_healthcheck_to_run_healthcheck(
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("command", ["import", "recompute"])
+@pytest.mark.parametrize("command", ["recompute"])
 def test_not_yet_built_subcommands_raise_until_their_phase_lands(
     monkeypatch: pytest.MonkeyPatch,
     command: str,
 ) -> None:
-    """These commands have no real implementation before their own work unit
-    (history_import/, outages/service.py). They must fail loudly, not
-    silently return success for work that never ran."""
+    """This command has no real implementation before its own work unit
+    (outages/service.py). It must fail loudly, not silently return success
+    for work that never ran."""
     _set_env(monkeypatch, VALID_ENV)
 
     with pytest.raises(NotImplementedError):

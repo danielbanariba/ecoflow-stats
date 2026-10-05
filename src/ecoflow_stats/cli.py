@@ -5,10 +5,12 @@ environment before doing anything else — so a misconfigured deployment never
 gets partway into collecting, importing or serving. ``serve`` builds the
 composition root (``bootstrap.py``) and the FastAPI app (``web/app.py``) and
 hands it to a server; ``check`` runs the full one-shot device check;
-``healthcheck`` probes this same process's own ``/healthz``. ``import`` and
-``recompute`` have no implementation yet and raise ``NotImplementedError``
-rather than silently doing nothing, so an operator never mistakes "not
-implemented" for a successful run.
+``import`` takes a verified, read-only snapshot of the legacy ecoflow-panel
+sources before validating its own required inputs further (the row-by-row
+transform lands in a later work unit); ``healthcheck`` probes this same
+process's own ``/healthz``. ``recompute`` has no implementation yet and
+raises ``NotImplementedError`` rather than silently doing nothing, so an
+operator never mistakes "not implemented" for a successful run.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import argparse
 import asyncio
 import os
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import uvicorn
@@ -28,6 +31,7 @@ from ecoflow_stats.config import ConfigError, load_settings
 from ecoflow_stats.devices.models import REGISTERED
 from ecoflow_stats.devices.registry import AdapterRegistry
 from ecoflow_stats.healthcheck import run_healthcheck
+from ecoflow_stats.history_import.panel_samples import SnapshotError, make_snapshot
 from ecoflow_stats.logs import configure_logging
 from ecoflow_stats.web.app import create_app
 
@@ -50,6 +54,12 @@ def _build_parser() -> argparse.ArgumentParser:
         subparser = subparsers.add_parser(name)
         if name == "check":
             subparser.add_argument("--serial", default=None)
+        if name == "import":
+            subparser.add_argument("--serial", default=None)
+            subparser.add_argument("--source-tz", default=None)
+            subparser.add_argument("--samples", default="/import/samples.db")
+            subparser.add_argument("--outage-log", default="/import/outages.log")
+            subparser.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -105,13 +115,49 @@ def _run_serve_command(
     return 0
 
 
+def _run_import_command(settings: Settings, args: argparse.Namespace) -> int:
+    """Validate the import's required inputs, then take a verified,
+    read-only snapshot of both legacy sources before anything in them is
+    read for real.
+
+    The row-by-row transform that turns the verified `samples.db` copy
+    into schema-v1 samples, plus the import report, is a later work unit
+    — this wiring only proves the snapshot half end-to-end.
+    """
+    if not args.serial:
+        print("--serial is required (no device serial given)", file=sys.stderr)
+        return 2
+    configured_serials = [device.serial for device in settings.devices]
+    if args.serial not in configured_serials:
+        print(f"{args.serial!r} is not a configured device serial", file=sys.stderr)
+        return 2
+    if not args.source_tz:
+        print(
+            "--source-tz is required (the timezone outages.log was written in)",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        make_snapshot(
+            samples_db=Path(args.samples),
+            outage_log=Path(args.outage_log),
+            snapshot_dir=settings.data_dir / "import-tmp",
+        )
+    except SnapshotError as exc:
+        print(f"import snapshot failed: {exc}", file=sys.stderr)
+        return 2
+    print("snapshot verified; the sample/outage-log transform lands in a later work unit")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse arguments, validate configuration, then dispatch.
 
     Returns the process exit code for the configuration-error path (``2``);
-    ``serve`` and ``healthcheck`` return their own real exit codes. ``import``
-    and ``recompute`` raise ``NotImplementedError`` until their own work unit
-    lands.
+    ``serve``, ``check``, ``import`` and ``healthcheck`` return their own
+    real exit codes. ``recompute`` raises ``NotImplementedError`` until its
+    own work unit lands.
     """
     args = _build_parser().parse_args(argv)
     try:
@@ -126,6 +172,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "check":
         return asyncio.run(_run_check_command(settings, args.serial))
+
+    if args.command == "import":
+        return _run_import_command(settings, args)
 
     if args.command == "healthcheck":
         return run_healthcheck(settings)

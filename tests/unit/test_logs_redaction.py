@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 
 from ecoflow_stats.config import load_settings
-from ecoflow_stats.logs import RedactionFilter, configure_logging
+from ecoflow_stats.logs import RedactionFilter, configure_logging, mask_serial
 
 VALID_ENV = {
     "ECOFLOW_ACCESS_KEY": "top-secret-access",
@@ -37,6 +37,16 @@ def _make_record(message: str) -> logging.LogRecord:
         args=(),
         exc_info=None,
     )
+
+
+def test_mask_serial_keeps_only_the_last_four_characters() -> None:
+    assert mask_serial("BA31ZEB1SF7F0001") == "…0001"
+
+
+def test_mask_serial_does_not_truncate_a_short_serial() -> None:
+    """Triangulation: a serial no longer than the mask window is shown
+    whole (still prefixed), rather than slicing into nonsense."""
+    assert mask_serial("AB12") == "…AB12"
 
 
 def test_filter_redacts_a_configured_secret_value() -> None:

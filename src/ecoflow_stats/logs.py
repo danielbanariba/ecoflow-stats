@@ -23,6 +23,15 @@ if TYPE_CHECKING:
 _NOISY_HTTP_LOGGERS = ("httpx", "httpcore")
 
 
+def mask_serial(serial: str) -> str:
+    """Mask a device serial to its last 4 characters, e.g. ``…F0A1``.
+
+    Shared between the logging redaction filter below and the `check`
+    command, so a serial is displayed identically wherever it is shown.
+    """
+    return f"…{serial[-4:]}" if len(serial) > 4 else f"…{serial}"
+
+
 class RedactionFilter(logging.Filter):
     """Replace configured secret values with ``***`` and device serials with
     ``…<last 4 characters>`` in every formatted log message.
@@ -35,7 +44,7 @@ class RedactionFilter(logging.Filter):
     def __init__(self, secrets: Iterable[str], serials: Iterable[str]) -> None:
         super().__init__()
         self._secrets = tuple(s for s in secrets if s)
-        self._serial_map = {s: f"…{s[-4:]}" for s in serials if s}
+        self._serial_map = {s: mask_serial(s) for s in serials if s}
 
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
@@ -84,4 +93,4 @@ def _build_filter(settings: Settings) -> RedactionFilter:
     return RedactionFilter(secrets=secrets, serials=serials)
 
 
-__all__ = ["RedactionFilter", "configure_logging"]
+__all__ = ["RedactionFilter", "configure_logging", "mask_serial"]

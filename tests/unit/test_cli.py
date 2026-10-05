@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import io
 import os
+from pathlib import Path
 
 import pytest
 
+from ecoflow_stats import cli
 from ecoflow_stats.acquisition.ecoflow_client import DeviceInfo
 from ecoflow_stats.cli import _build_parser, _run_check_command, main
 from ecoflow_stats.clock import SystemClock
@@ -58,24 +60,51 @@ def test_any_subcommand_with_a_missing_required_variable_exits_2_and_names_it(
     assert "ECOFLOW_SECRET_KEY" in capsys.readouterr().err
 
 
-def test_serve_with_valid_configuration_starts_normally(
+def test_serve_with_valid_configuration_builds_the_app_and_serves_it(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    _set_env(monkeypatch, VALID_ENV)
+    """`serve`'s stub ("config-loading path is real... once bootstrap.py
+    and web/app.py exist" -- cli.py's own module docstring, written in
+    Phase 1) becomes real here: it must build the composition root and
+    actually hand the app to a server, not just validate configuration
+    and return. The runner is monkeypatched so this never binds a real
+    socket or blocks."""
+    _set_env(monkeypatch, {**VALID_ENV, "ECOFLOW_STATS_DATA_DIR": str(tmp_path)})
+    calls: list[tuple[object, str, int]] = []
+    monkeypatch.setattr(
+        cli, "_uvicorn_run", lambda app, host, port: calls.append((app, host, port))
+    )
 
     exit_code = main(["serve"])
 
     assert exit_code == 0
+    assert len(calls) == 1
+    _app, host, port = calls[0]
+    assert (host, port) == ("0.0.0.0", 8080)
 
 
-@pytest.mark.parametrize("command", ["import", "recompute", "healthcheck"])
+def test_main_dispatches_healthcheck_to_run_healthcheck(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_env(monkeypatch, VALID_ENV)
+    calls = []
+    monkeypatch.setattr(cli, "run_healthcheck", lambda settings: calls.append(settings) or 0)
+
+    exit_code = main(["healthcheck"])
+
+    assert exit_code == 0
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("command", ["import", "recompute"])
 def test_not_yet_built_subcommands_raise_until_their_phase_lands(
     monkeypatch: pytest.MonkeyPatch,
     command: str,
 ) -> None:
     """These commands have no real implementation before their own work unit
-    (history_import/, outages/service.py, web/routes/health.py). They must
-    fail loudly, not silently return success for work that never ran."""
+    (history_import/, outages/service.py). They must fail loudly, not
+    silently return success for work that never ran."""
     _set_env(monkeypatch, VALID_ENV)
 
     with pytest.raises(NotImplementedError):

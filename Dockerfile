@@ -7,18 +7,15 @@
 # runtime -- the HEALTHCHECK below runs `ecoflow-stats healthcheck`,
 # a plain Python HTTP GET against this same container's own /healthz.
 #
-# NOTE (recorded, not silently skipped): neither base image below is
-# pinned to a sha256 digest, as the design asked ("pin the digest when
-# implementing") -- this sandbox has no network access to pull and
-# verify a real digest. Daniel should pin both before a real build.
-# The uv image tag IS a real, verified version: 0.9.10 is the exact uv
-# release already installed on this machine (`uv --version`), not an
-# invented number -- but it has not been confirmed to exist on the
-# registry from here either.
+# Both base images are pinned to the digest actually resolved and pulled
+# during this slice's own `docker build` (design D2/D13: "pin the digest
+# when implementing") -- not invented. The uv tag is also the exact uv
+# release already installed on this machine (`uv --version`). Re-pin
+# both the next time either image is intentionally upgraded.
 
-FROM ghcr.io/astral-sh/uv:0.9.10 AS uv
+FROM ghcr.io/astral-sh/uv:0.9.10@sha256:29bd45092ea8902c0bbb7f0a338f0494a382b1f4b18355df5be270ade679ff1d AS uv
 
-FROM python:3.14-slim-trixie AS builder
+FROM python:3.14-slim-trixie@sha256:c3e521df8b2b498a7a682e7e18676771cb80c6b75b8699af886b2d554ce40151 AS builder
 COPY --from=uv /uv /uvx /usr/local/bin/
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -28,7 +25,7 @@ COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
 
-FROM python:3.14-slim-trixie
+FROM python:3.14-slim-trixie@sha256:c3e521df8b2b498a7a682e7e18676771cb80c6b75b8699af886b2d554ce40151
 RUN groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app \
     && mkdir -p /data \

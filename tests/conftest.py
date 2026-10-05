@@ -8,6 +8,17 @@ from collections.abc import Iterator
 import pytest
 
 
+@pytest.fixture
+def anyio_backend() -> str:
+    """Pin anyio's pytest plugin to the asyncio backend only.
+
+    Without this, anyio parametrizes every ``@pytest.mark.anyio`` test over
+    every backend it knows about, including trio — which is not a
+    dependency of this project and is not installed.
+    """
+    return "asyncio"
+
+
 @pytest.fixture(autouse=True)
 def _restore_global_logging_state() -> Iterator[None]:
     """Snapshot and restore process-wide `logging` state around every test.

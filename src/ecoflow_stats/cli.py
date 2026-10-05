@@ -6,11 +6,12 @@ gets partway into collecting, importing or serving. ``serve`` builds the
 composition root (``bootstrap.py``) and the FastAPI app (``web/app.py``) and
 hands it to a server; ``check`` runs the full one-shot device check;
 ``import`` takes a verified, read-only snapshot of the legacy ecoflow-panel
-sources before validating its own required inputs further (the row-by-row
-transform lands in a later work unit); ``healthcheck`` probes this same
-process's own ``/healthz``. ``recompute`` has no implementation yet and
-raises ``NotImplementedError`` rather than silently doing nothing, so an
-operator never mistakes "not implemented" for a successful run.
+sources, then imports the outage log and samples into the application
+database (or, with ``--dry-run``, into a throwaway one) and prints a
+report; ``healthcheck`` probes this same process's own ``/healthz``.
+``recompute`` has no implementation yet and raises ``NotImplementedError``
+rather than silently doing nothing, so an operator never mistakes "not
+implemented" for a successful run.
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ import argparse
 import asyncio
 import os
 import sys
+import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -32,7 +35,12 @@ from ecoflow_stats.devices.models import REGISTERED
 from ecoflow_stats.devices.registry import AdapterRegistry
 from ecoflow_stats.healthcheck import run_healthcheck
 from ecoflow_stats.history_import.panel_samples import SnapshotError, make_snapshot
+from ecoflow_stats.history_import.report import ImportReport
+from ecoflow_stats.history_import.service import run_import
 from ecoflow_stats.logs import configure_logging
+from ecoflow_stats.storage.database import Database
+from ecoflow_stats.storage.devices import DeviceStore
+from ecoflow_stats.storage.imports import ImportRunStore
 from ecoflow_stats.web.app import create_app
 
 if TYPE_CHECKING:
@@ -115,20 +123,66 @@ def _run_serve_command(
     return 0
 
 
-def _run_import_command(settings: Settings, args: argparse.Namespace) -> int:
-    """Validate the import's required inputs, then take a verified,
-    read-only snapshot of both legacy sources before anything in them is
-    read for real.
+def _import_into(
+    *,
+    db_path: Path,
+    serial: str,
+    adapter_id: str,
+    source_tz: str,
+    snapshot_samples_db: Path,
+    snapshot_outage_log: Path,
+    now: datetime,
+    record_run: bool,
+) -> ImportReport:
+    """Open the database at `db_path`, seed the device row, and run the
+    import against it. `record_run` is false for `--dry-run`: the import
+    still runs for real against `db_path` (so the report reflects real
+    validation), but no `import_runs` completion is recorded — the
+    caller always points `db_path` at a throwaway database for a dry run,
+    never at the real application database.
+    """
+    database = Database(db_path)
+    try:
+        now_s = int(now.timestamp())
+        device = DeviceStore(database.writer).upsert(
+            sn=serial, adapter_id=adapter_id, created_at=now_s
+        )
+        import_id = ImportRunStore(database.writer).start(
+            device.id, started_at=now_s, source_tz=source_tz
+        )
+        report = run_import(
+            snapshot_samples_db=snapshot_samples_db,
+            snapshot_outage_log=snapshot_outage_log,
+            device_id=device.id,
+            source_tz=source_tz,
+            import_id=import_id,
+            writer_conn=database.writer,
+            now=now,
+        )
+        if record_run:
+            ImportRunStore(database.writer).finish(
+                import_id, int(now.timestamp()), report.to_json()
+            )
+        return report
+    finally:
+        database.close()
 
-    The row-by-row transform that turns the verified `samples.db` copy
-    into schema-v1 samples, plus the import report, is a later work unit
-    — this wiring only proves the snapshot half end-to-end.
+
+def _run_import_command(settings: Settings, args: argparse.Namespace) -> int:
+    """Validate the import's required inputs, take a verified read-only
+    snapshot of both legacy sources, then import the outage log and
+    samples and print the resulting report.
+
+    With ``--dry-run``, the same import runs for real against a throwaway
+    database instead of the application's own, so the printed report is
+    trustworthy without writing anything an operator has not yet decided
+    to keep.
     """
     if not args.serial:
         print("--serial is required (no device serial given)", file=sys.stderr)
         return 2
-    configured_serials = [device.serial for device in settings.devices]
-    if args.serial not in configured_serials:
+    device_config = next((d for d in settings.devices if d.serial == args.serial), None)
+    if device_config is None:
         print(f"{args.serial!r} is not a configured device serial", file=sys.stderr)
         return 2
     if not args.source_tz:
@@ -139,7 +193,7 @@ def _run_import_command(settings: Settings, args: argparse.Namespace) -> int:
         return 2
 
     try:
-        make_snapshot(
+        snapshot = make_snapshot(
             samples_db=Path(args.samples),
             outage_log=Path(args.outage_log),
             snapshot_dir=settings.data_dir / "import-tmp",
@@ -147,7 +201,35 @@ def _run_import_command(settings: Settings, args: argparse.Namespace) -> int:
     except SnapshotError as exc:
         print(f"import snapshot failed: {exc}", file=sys.stderr)
         return 2
-    print("snapshot verified; the sample/outage-log transform lands in a later work unit")
+
+    now = datetime.now(UTC)
+    adapter_id = device_config.adapter_id or "generic"
+    if args.dry_run:
+        with tempfile.TemporaryDirectory() as scratch_dir:
+            report = _import_into(
+                db_path=Path(scratch_dir) / "dry-run.db",
+                serial=args.serial,
+                adapter_id=adapter_id,
+                source_tz=args.source_tz,
+                snapshot_samples_db=snapshot.samples_db,
+                snapshot_outage_log=snapshot.outage_log,
+                now=now,
+                record_run=False,
+            )
+        print(report.render())
+        print("(dry run: nothing was written to the application database)")
+    else:
+        report = _import_into(
+            db_path=settings.data_dir / "ecoflow-stats.db",
+            serial=args.serial,
+            adapter_id=adapter_id,
+            source_tz=args.source_tz,
+            snapshot_samples_db=snapshot.samples_db,
+            snapshot_outage_log=snapshot.outage_log,
+            now=now,
+            record_run=True,
+        )
+        print(report.render())
     return 0
 
 

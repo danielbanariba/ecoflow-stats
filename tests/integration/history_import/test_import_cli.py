@@ -1,14 +1,13 @@
 """Integration tests for the `import` CLI subcommand's wiring: its two
-required inputs, the configured-serial guard, and the verified snapshot
-it takes before anything is read for real.
-
-The row-by-row transform that turns the snapshot into stored samples is a
-later work unit — these tests prove the snapshot half end-to-end only.
+required inputs, the configured-serial guard, the verified snapshot it
+takes before anything is read for real, and the full import (or, with
+`--dry-run`, a throwaway one) that follows.
 """
 
 from __future__ import annotations
 
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -79,8 +78,9 @@ def test_import_with_an_unconfigured_serial_fails(
     assert not (tmp_path / "import-tmp").exists()
 
 
-def test_import_with_valid_inputs_takes_a_verified_snapshot(
+def test_import_with_valid_inputs_imports_into_the_application_database(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
     samples_db = tmp_path / "samples.db"
@@ -107,3 +107,50 @@ def test_import_with_valid_inputs_takes_a_verified_snapshot(
     assert exit_code == 0
     assert (data_dir / "import-tmp" / "samples.db").exists()
     assert (data_dir / "import-tmp" / "outages.log").exists()
+    out = capsys.readouterr().out
+    assert "samples inserted" in out
+    assert "outage events imported" in out
+    conn = sqlite3.connect(data_dir / "ecoflow-stats.db")
+    try:
+        (sample_count,) = conn.execute("SELECT COUNT(*) FROM samples").fetchone()
+        (event_count,) = conn.execute("SELECT COUNT(*) FROM legacy_outages").fetchone()
+    finally:
+        conn.close()
+    assert sample_count == 0  # write_valid_samples_db seeds no rows, just the shape
+    assert event_count == 1
+
+
+def test_dry_run_prints_a_report_without_writing_the_application_database(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """An operator must be able to preview an import's report before
+    trusting it with the real application database."""
+    samples_db = tmp_path / "samples.db"
+    outage_log = tmp_path / "outages.log"
+    write_valid_samples_db(samples_db)
+    write_outage_log(outage_log)
+    data_dir = tmp_path / "data"
+    _set_env(monkeypatch, {**_VALID_ENV, "ECOFLOW_STATS_DATA_DIR": str(data_dir)})
+
+    exit_code = main(
+        [
+            "import",
+            "--serial",
+            "TESTDEV0001",
+            "--source-tz",
+            "America/Tegucigalpa",
+            "--samples",
+            str(samples_db),
+            "--outage-log",
+            str(outage_log),
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "outage events imported" in out
+    assert "dry run" in out
+    assert not (data_dir / "ecoflow-stats.db").exists()

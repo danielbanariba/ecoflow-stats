@@ -70,4 +70,32 @@ class SupervisedTask:
                 backoff = _INITIAL_BACKOFF_S
 
 
-__all__ = ["SupervisedTask"]
+@dataclass(frozen=True, slots=True)
+class SupervisedTaskHandle:
+    """A started :class:`SupervisedTask` plus the real ``asyncio.Task``
+    driving it, so a caller (the health route) can ask whether the
+    supervisor itself is still alive without reaching into asyncio
+    internals directly.
+
+    ``alive`` and ``running`` answer different questions: ``running`` is
+    legitimately ``False`` during an ordinary crash backoff the supervisor
+    will recover from on its own; ``alive`` is ``False`` only once the
+    wrapping task has actually ended (a clean shutdown via cancellation, or
+    a crash kind ``SupervisedTask.run`` itself cannot catch). The health
+    check's 503 trigger (amendment A1: "the collector task is dead") is
+    ``alive``, never ``running``.
+    """
+
+    supervised: SupervisedTask
+    task: asyncio.Task[None]
+
+    @property
+    def running(self) -> bool:
+        return self.supervised.running
+
+    @property
+    def alive(self) -> bool:
+        return not self.task.done()
+
+
+__all__ = ["SupervisedTask", "SupervisedTaskHandle"]

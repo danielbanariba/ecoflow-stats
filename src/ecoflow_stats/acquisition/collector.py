@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from ecoflow_stats.acquisition.ecoflow_client import (
@@ -137,4 +138,46 @@ async def run_tick(
     return list(await asyncio.gather(*(_isolated(device) for device in devices)))
 
 
-__all__ = ["CollectorDevice", "collect_one", "run_tick"]
+def next_aligned_slot(now: datetime, *, interval_s: int, offset_s: int) -> datetime:
+    """The next wall-clock instant, strictly after ``now``, that lands
+    ``offset_s`` seconds into an ``interval_s``-aligned slot of the epoch.
+
+    Always strictly in the future: an overrun that finishes exactly on a
+    slot boundary skips ahead to the next one rather than firing again
+    immediately for the same instant.
+    """
+    now_epoch = int(now.timestamp())
+    k = (now_epoch - offset_s) // interval_s + 1
+    candidate_epoch = k * interval_s + offset_s
+    return datetime.fromtimestamp(candidate_epoch, tz=UTC)
+
+
+async def run_forever(
+    devices: Sequence[CollectorDevice],
+    *,
+    cloud: DeviceCloud,
+    registry: AdapterRegistry,
+    samples: SampleStore,
+    failures: FailureLog,
+    clock: Clock,
+    poll_interval_s: int = 60,
+    poll_offset_s: int = 30,
+) -> None:
+    """Run one tick per aligned slot, forever, until cancelled.
+
+    Each slot is awaited in full before the next one is computed, so a
+    slow tick is never overlapped by the next (acquisition: per-device
+    collection cadence without overlapping ticks). An overrun — a tick
+    that finishes after its next scheduled slot has already passed —
+    skips straight to the following future slot rather than firing
+    immediately or trying to catch up on missed ones.
+    """
+    while True:
+        next_at = next_aligned_slot(clock.now(), interval_s=poll_interval_s, offset_s=poll_offset_s)
+        await clock.sleep_until(next_at)
+        await run_tick(
+            devices, cloud=cloud, registry=registry, samples=samples, failures=failures, clock=clock
+        )
+
+
+__all__ = ["CollectorDevice", "collect_one", "next_aligned_slot", "run_forever", "run_tick"]

@@ -1,13 +1,15 @@
-"""Verified, read-only snapshot of the legacy ecoflow-panel sources.
+"""Verified, read-only snapshot of the legacy ecoflow-panel sources, and
+the row-by-row transform of its `samples.db` into schema-v1 samples.
 
 Both `samples.db` and `outages.log` are copied into one snapshot directory
 before either is read for real, so they represent the same instant
 (history-import requirement: "Import Reads a Consistent Read-Only
 Snapshot"; amendment item 8 extends the design's samples-only snapshot to
 cover the log too, since the legacy watcher keeps appending to it during
-the parallel-run transition). The row transform that turns a verified
-`samples.db` copy into schema-v1 rows is a later work unit; this module
-only proves the source is safe to read.
+the parallel-run transition). The legacy `samples` table already shares
+all 21 column names with this app's own schema, so the transform is a
+straight copy with validation — no field renaming, unlike a live-device
+adapter.
 """
 
 from __future__ import annotations
@@ -15,15 +17,20 @@ from __future__ import annotations
 import shutil
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from ecoflow_stats.devices.reading import FIELD_NAMES
+from ecoflow_stats.devices.reading import FIELD_NAMES, Reading
 
 _V1_COLUMNS = frozenset({"ts", *FIELD_NAMES})
 _MAX_QUICK_CHECK_RETRIES = 3
 _QUICK_CHECK_RETRY_DELAY_S = 2.0
+_MIN_VALID_TS = int(datetime(2020, 1, 1, tzinfo=UTC).timestamp())
+"""Legacy history cannot predate the panel itself; a timestamp before this
+is corrupt data, not a real sample (history-import requirement: a row
+outside the valid range is rejected, not imported)."""
 
 
 class SnapshotError(Exception):
@@ -118,4 +125,62 @@ def make_snapshot(
     return Snapshot(samples_db=samples_copy, outage_log=outage_log_copy)
 
 
-__all__ = ["Snapshot", "SnapshotError", "make_snapshot"]
+@dataclass(frozen=True, slots=True)
+class TransformedRow:
+    """One legacy row, validated and mapped onto schema v1."""
+
+    ts: int
+    reading: Reading
+
+
+@dataclass(frozen=True, slots=True)
+class RejectedRow:
+    """One legacy row that could not be trusted, with why."""
+
+    ts: object
+    reason: str
+
+
+def transform_row(raw: Mapping[str, object], *, now: datetime) -> TransformedRow | RejectedRow:
+    """Map one legacy `samples.db` row onto schema v1, or reject it.
+
+    `ts` must be a real integer within ``[2020-01-01, now + 1 day]``, and
+    every measurement value must be numeric or ``NULL`` — anything else
+    (including a `bool`, which is an `int` subclass) is rejected rather
+    than silently coerced, the same discipline `devices.adapter.num()`
+    applies to a live payload.
+    """
+    ts_raw = raw.get("ts")
+    if not isinstance(ts_raw, int) or isinstance(ts_raw, bool):
+        return RejectedRow(ts=ts_raw, reason=f"ts is not an integer: {ts_raw!r}")
+    max_valid_ts = int((now + timedelta(days=1)).timestamp())
+    if not (_MIN_VALID_TS <= ts_raw <= max_valid_ts):
+        return RejectedRow(ts=ts_raw, reason=f"ts {ts_raw} is outside the valid import range")
+
+    values: dict[str, object] = {}
+    for name in FIELD_NAMES:
+        value = raw.get(name)
+        if isinstance(value, bool) or (value is not None and not isinstance(value, (int, float))):
+            return RejectedRow(ts=ts_raw, reason=f"{name} is not numeric or NULL: {value!r}")
+        values[name] = value
+
+    return TransformedRow(ts=ts_raw, reading=Reading(**values))
+
+
+def iter_legacy_rows(conn: sqlite3.Connection) -> Iterator[Mapping[str, object]]:
+    """Read every row of a verified `samples.db` copy's `samples` table,
+    in `ts` order. `conn` must have a mapping-like `row_factory`
+    (``sqlite3.Row``) set by the caller."""
+    for row in conn.execute("SELECT * FROM samples ORDER BY ts"):
+        yield dict(row)
+
+
+__all__ = [
+    "RejectedRow",
+    "Snapshot",
+    "SnapshotError",
+    "TransformedRow",
+    "iter_legacy_rows",
+    "make_snapshot",
+    "transform_row",
+]

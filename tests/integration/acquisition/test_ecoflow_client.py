@@ -9,7 +9,7 @@ never treated as an empty or successful reading.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import httpx
 import pytest
@@ -40,14 +40,34 @@ class _CountingHandler:
         return self._respond(request)
 
 
+class _SleepSpy:
+    """Records every backoff duration it is asked to wait, without waiting —
+    so a test can prove a real delay is requested without actually paying it."""
+
+    def __init__(self) -> None:
+        self.waits: list[float] = []
+
+    async def __call__(self, seconds: float) -> None:
+        self.waits.append(seconds)
+
+
 def _client(
-    handler: _CountingHandler, base_url: str = "https://api.ecoflow.com"
+    handler: _CountingHandler,
+    base_url: str = "https://api.ecoflow.com",
+    *,
+    retry_backoff_s: float = 0,
+    sleep: Callable[[float], Awaitable[None]] | None = None,
 ) -> EcoFlowCloudClient:
+    extra: dict[str, Callable[[float], Awaitable[None]]] = {}
+    if sleep is not None:
+        extra["sleep"] = sleep
     return EcoFlowCloudClient(
         base_url=base_url,
         access_key=_ACCESS_KEY,
         secret_key=_SECRET_KEY,
         transport=httpx.MockTransport(handler),
+        retry_backoff_s=retry_backoff_s,
+        **extra,
     )
 
 
@@ -131,14 +151,62 @@ async def test_connection_error_raises_cloud_network_error() -> None:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("status", [500, 503, 429])
-async def test_server_errors_and_rate_limit_are_retried_then_raised(status: int) -> None:
-    """5xx and 429 are transient — retried once before being raised."""
+@pytest.mark.parametrize("status", [500, 503])
+async def test_server_errors_are_retried_then_raised(status: int) -> None:
+    """5xx is transient — retried once before being raised."""
     handler = _CountingHandler(lambda _request: httpx.Response(status))
     with pytest.raises(CloudHttpError) as exc_info:
         await _client(handler).list_devices()
     assert exc_info.value.status == status
     assert handler.calls == 2
+
+
+@pytest.mark.anyio
+async def test_rate_limit_is_not_retried_within_the_same_poll() -> None:
+    """A 429 must fail this poll immediately rather than retry in-process:
+    retrying into an active rate limit within the same cycle makes it worse.
+    The next scheduled poll, a minute later, is the real retry."""
+    spy = _SleepSpy()
+    handler = _CountingHandler(lambda _request: httpx.Response(429))
+    client = _client(handler, sleep=spy)
+    with pytest.raises(CloudHttpError) as exc_info:
+        await client.list_devices()
+    assert exc_info.value.status == 429
+    assert handler.calls == 1
+    assert spy.waits == []
+
+
+@pytest.mark.anyio
+async def test_a_retryable_failure_waits_the_configured_backoff_before_retrying() -> None:
+    """The client must actually wait the configured backoff before its retry
+    — retrying instantly is useless against a real network blip (observed
+    EcoFlow API outages last minutes, not milliseconds)."""
+    spy = _SleepSpy()
+    handler = _CountingHandler(lambda _request: httpx.Response(500))
+    client = _client(handler, retry_backoff_s=7.5, sleep=spy)
+    with pytest.raises(CloudHttpError):
+        await client.list_devices()
+    assert spy.waits == [7.5]
+
+
+@pytest.mark.anyio
+async def test_production_default_backoff_is_a_real_delay_not_a_test_speed_value() -> None:
+    """Regression test: the backoff used when nothing overrides it must be a
+    real production delay, not the 10ms test-speed value that once leaked
+    into production and made the retry useless against a live network blip."""
+    spy = _SleepSpy()
+    handler = _CountingHandler(lambda _request: httpx.Response(500))
+    client = EcoFlowCloudClient(
+        base_url="https://api.ecoflow.com",
+        access_key=_ACCESS_KEY,
+        secret_key=_SECRET_KEY,
+        transport=httpx.MockTransport(handler),
+        sleep=spy,
+    )
+    with pytest.raises(CloudHttpError):
+        await client.list_devices()
+    assert len(spy.waits) == 1
+    assert spy.waits[0] >= 1.0, "the default retry must wait a real delay"
 
 
 @pytest.mark.anyio

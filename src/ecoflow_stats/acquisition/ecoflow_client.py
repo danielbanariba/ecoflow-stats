@@ -22,7 +22,7 @@ import httpx
 from ecoflow_stats.acquisition.signing import sign
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Awaitable, Callable, Mapping
 
 ALLOWED_PATHS: frozenset[str] = frozenset(
     {
@@ -32,7 +32,10 @@ ALLOWED_PATHS: frozenset[str] = frozenset(
 )
 
 _MAX_ATTEMPTS = 2
-_RETRY_BACKOFF_S = 0.01
+_DEFAULT_RETRY_BACKOFF_S = 2.0
+"""Real-world default: a 10ms retry is useless against an EcoFlow API outage
+(observed to last minutes, not milliseconds) and only adds load to an
+endpoint that may already be rate-limiting. Injectable so tests run fast."""
 _HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=5.0)
 
 
@@ -137,9 +140,13 @@ class EcoFlowCloudClient:
         access_key: str,
         secret_key: str,
         transport: httpx.AsyncBaseTransport | None = None,
+        retry_backoff_s: float = _DEFAULT_RETRY_BACKOFF_S,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._access_key = access_key
         self._secret_key = secret_key
+        self._retry_backoff_s = retry_backoff_s
+        self._sleep = sleep
         inner = transport if transport is not None else httpx.AsyncHTTPTransport()
         self._http = httpx.AsyncClient(
             base_url=base_url,
@@ -176,14 +183,20 @@ class EcoFlowCloudClient:
                 last_error = CloudNetworkError(str(exc))
             else:
                 status = response.status_code
-                if status == 429 or status >= 500:
+                if status == 429:
+                    # A rate limit must not be retried within the same poll:
+                    # hitting an already-limited endpoint again moments later
+                    # only makes it worse. The next scheduled poll, a minute
+                    # later, is the real retry.
+                    raise CloudHttpError(status)
+                if status >= 500:
                     last_error = CloudHttpError(status)
                 elif status >= 400:
                     raise CloudHttpError(status)
                 else:
                     return _parse_envelope(response)
             if attempt < _MAX_ATTEMPTS:
-                await asyncio.sleep(_RETRY_BACKOFF_S)
+                await self._sleep(self._retry_backoff_s)
         assert last_error is not None  # the loop above always sets it before exiting
         raise last_error
 

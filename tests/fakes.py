@@ -1,15 +1,21 @@
 """Test doubles shared across the suite.
 
-Seeded here with ``FakeClock`` only; later work units add ``FakeDeviceCloud``
-and ``RecordingNotifier`` as the phases that need them land (the collector
-and notification tests). Triangulation skipped: this is test infrastructure,
-not a behavior under test — it has no Phase 1 consumer yet and is exercised
-indirectly once the collector's scheduling tests drive it.
+``RecordingNotifier`` is added once the notification work unit needs it.
+Triangulation skipped for the fakes themselves: they are test
+infrastructure, not behavior under test, and are exercised indirectly
+through the real tests that use them.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from ecoflow_stats.acquisition.ecoflow_client import DeviceInfo
 
 
 class FakeClock:
@@ -27,4 +33,32 @@ class FakeClock:
         self._now = max(self._now, when)
 
 
-__all__ = ["FakeClock"]
+@dataclass
+class FakeDeviceCloud:
+    """Scriptable ``DeviceCloud`` double.
+
+    ``quota_results`` maps a serial to either a raw payload (returned) or
+    an ``Exception`` instance (raised) — so a test can script one device's
+    failure without touching another's success. Every call is recorded.
+    """
+
+    devices: list[DeviceInfo] = field(default_factory=list)
+    quota_results: dict[str, Mapping[str, object] | Exception] = field(default_factory=dict)
+    list_devices_calls: int = 0
+    fetch_quota_calls: list[str] = field(default_factory=list)
+
+    async def list_devices(self) -> list[DeviceInfo]:
+        self.list_devices_calls += 1
+        return list(self.devices)
+
+    async def fetch_quota(self, sn: str) -> Mapping[str, object]:
+        self.fetch_quota_calls.append(sn)
+        result = self.quota_results.get(sn)
+        if isinstance(result, Exception):
+            raise result
+        if result is None:
+            raise KeyError(f"FakeDeviceCloud: no scripted quota result for {sn!r}")
+        return result
+
+
+__all__ = ["FakeClock", "FakeDeviceCloud"]

@@ -136,3 +136,29 @@ def test_reader_connections_are_thread_local_and_distinct_from_the_writer(
         assert db.reader() is reader  # cached per-thread, not reopened every call
     finally:
         db.close()
+
+
+def test_is_writable_returns_true_for_a_fresh_database(tmp_path: Path) -> None:
+    """The health check (amendment A1) must report a normally-writable
+    database as healthy, not just happen to pass by accident."""
+    db = Database(tmp_path / "ecoflow-stats.db")
+    try:
+        assert db.is_writable() is True
+    finally:
+        db.close()
+
+
+def test_is_writable_returns_false_once_the_connection_cannot_write(tmp_path: Path) -> None:
+    """A write failure (amendment A1 scenario: "the database cannot be
+    written") must be detected, not just assumed healthy. ``PRAGMA
+    query_only = 1`` is used instead of an OS-level chmod: a connection
+    already holding an open file descriptor keeps writing through it
+    regardless of a later permission change, so chmod alone would not
+    reliably reproduce a real write failure here."""
+    db = Database(tmp_path / "ecoflow-stats.db")
+    try:
+        db.writer.execute("PRAGMA query_only = 1")
+        assert db.is_writable() is False
+    finally:
+        db.writer.execute("PRAGMA query_only = 0")
+        db.close()

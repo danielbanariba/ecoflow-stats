@@ -109,5 +109,17 @@ class Database:
             conn.close()
             self._local.conn = None
 
+    def is_writable(self) -> bool:
+        """Probe whether the writer connection can currently write, without
+        persisting anything (health check, amendment A1): a collector still
+        running against an unwritable database — a full disk, or a
+        filesystem gone read-only — must report unhealthy."""
+        try:
+            self.writer.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError:
+            return False
+        self.writer.rollback()
+        return True
+
 
 __all__ = ["Database", "DatabaseError", "IncompatibleDatabaseError"]

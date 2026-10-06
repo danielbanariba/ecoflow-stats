@@ -2,15 +2,19 @@
 {% import "_macros.html" as macros %}
 {% block title %}{{ t('nav.overview') }} · {{ t('app.name') }}{% endblock %}
 {% block content %}
-<h1>{{ t('nav.overview') }}</h1>
+<div class="page-head reveal">
+  <p class="eyebrow page-head__eyebrow">{{ t('nav.overview') }}</p>
+  <h1 class="page-head__title">{{ t('nav.overview') }}</h1>
+</div>
 
-<section class="device-selector-section" aria-label="{{ t('device.selector.label') }}">
+<section class="device-selector-section reveal" aria-label="{{ t('device.selector.label') }}">
   {{ macros.device_selector(view.devices, t) }}
 </section>
 
 <section
   id="live-card"
-  class="live-card-section"
+  class="bento mt-6"
+  aria-label="{{ t('nav.overview') }}"
   hx-get="/partials/live?device={{ view.selected_device_id }}"
   hx-trigger="every 30s"
   hx-swap="innerHTML"

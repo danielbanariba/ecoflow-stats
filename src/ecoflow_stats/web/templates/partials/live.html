@@ -1,21 +1,45 @@
+{% import "_macros.html" as macros %}
 {% if view.has_data %}
-<div class="live-card" data-grid="{{ view.grid }}">
-  <p class="live-card__grid live-card__grid--{{ view.grid }}" aria-live="polite">
-    {% if view.grid == 'present' %}{{ t('live.grid.present') }}
-    {% elif view.grid == 'absent' %}{{ t('live.grid.absent') }}
-    {% else %}{{ t('live.grid.unknown') }}{% endif %}
-  </p>
-  <p class="live-card__soc">
-    <span class="live-card__label">{{ t('live.soc.label') }}:</span>
-    {% if view.soc is not none %}{{ view.soc }}%{% else %}{{ t('common.unavailable') }}{% endif %}
-  </p>
-  <p class="live-card__age">
-    {{ t('live.data_age').format(seconds=view.age_s) }}
-    {% if view.stale %}<span class="badge badge--stale">{{ t('live.stale') }}</span>{% endif %}
-  </p>
+<div
+  class="tile tile--span-12 hero-tile reveal"
+  data-grid="{{ view.grid }}"
+>
+  <div class="hero-tile__top">
+    <div class="hero-tile__status">
+      <p class="eyebrow">{{ t('live.grid_label') }}</p>
+      <div class="status-row status-row--hero">
+        <span
+          class="status-dot status-dot--lg{% if view.grid == 'present' %} status-dot--present{% elif view.grid == 'absent' %} status-dot--absent{% endif %}"
+          aria-hidden="true"
+        ></span>
+        <h2
+          class="hero-tile__headline{% if view.grid == 'present' %} hero-tile__headline--present{% elif view.grid == 'absent' %} hero-tile__headline--absent{% else %} hero-tile__headline--unknown{% endif %}"
+          aria-live="polite"
+        >
+          {% if view.grid == 'present' %}{{ t('live.grid.present') }}
+          {% elif view.grid == 'absent' %}{{ t('live.grid.absent') }}
+          {% else %}{{ t('live.grid.unknown') }}{% endif %}
+        </h2>
+      </div>
+      <div class="inline-badge-row">
+        <span>{{ t('live.data_age').format(seconds=view.age_s) }}</span>
+        {% if view.stale %}<span class="badge badge--stale">{{ t('live.stale') }}</span>{% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="hero-tile__battery">
+    {% if view.soc is not none %}
+    {{ macros.battery_ring(view.soc, 'overview-ring', t('live.ring_label'), t('live.ring_aria').format(percent=view.soc)) }}
+    {% endif %}
+    <div class="hero-tile__battery-copy">
+      <span class="eyebrow">{{ t('live.soc.label') }}</span>
+      <span class="value-lg num">{% if view.soc is not none %}{{ view.soc }}%{% else %}{{ t('common.unavailable') }}{% endif %}</span>
+    </div>
+  </div>
 </div>
 {% else %}
-<div class="empty-state" role="status">
+<div class="tile tile--span-12 empty-state reveal" role="status">
   <p class="empty-state__title">{{ t('live.empty_state.title') }}</p>
   <p class="empty-state__body">{{ t('live.empty_state.body') }}</p>
 </div>

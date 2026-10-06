@@ -133,6 +133,7 @@ def overview_page(request: Request, device: int | None = None) -> HTMLResponse:
             "html_lang": html_lang(lang),
             "view": view,
             "csrf_token": csrf_token(security.app_secret, csrf_cookie),
+            "active_nav": "overview",
         },
     )
     response.set_cookie(DEVICE_COOKIE, str(selected_id), max_age=_COOKIE_MAX_AGE_S, samesite="lax")
@@ -210,6 +211,7 @@ def outages_page(
             "html_lang": html_lang(lang),
             "view": view_model,
             "tz": api_ctx.tz,
+            "active_nav": "outages",
         },
     )
     response.set_cookie(DEVICE_COOKIE, str(selected_id), max_age=_COOKIE_MAX_AGE_S, samesite="lax")
@@ -307,6 +309,7 @@ def battery_page(
             "html_lang": html_lang(lang),
             "view": view_model,
             "tz": request.app.state.api.tz,
+            "active_nav": "battery",
         },
     )
     response.set_cookie(DEVICE_COOKIE, str(selected_id), max_age=_COOKIE_MAX_AGE_S, samesite="lax")

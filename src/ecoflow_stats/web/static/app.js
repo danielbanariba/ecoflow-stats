@@ -1,11 +1,23 @@
 // ecoflow-stats client-side enhancement, loaded as an external script
 // only (strict CSP: script-src 'self'; no inline scripts, no `hx-on`
-// attributes, no `js:` values — design part 3, section 4 "HTMX").
+// attributes, no `js:` values, no `style="..."` attributes — dynamic
+// values are only ever set through CSSOM `el.style.setProperty` below,
+// never through an inline `style` attribute).
 //
-// Progressive enhancement only: the device selector's plain <form> +
-// <button> already works with JavaScript disabled (web-ui "Switching
-// the selector switches the shown data" does not require JS). When JS
-// *is* available, auto-submit on change removes the extra click.
+// Progressive enhancement only, end to end: the device selector's plain
+// <form> + <button>, the gap-review `hx-get` expansion, every chart's
+// `<details>` fallback table, and the battery ring's server-rendered SVG
+// already work with JavaScript disabled. When JS *is* available, this
+// file adds auto-submit, the glass-nav scroll effect, scroll-reveal
+// entrances, the ring's animated fill, and the four ECharts visuals —
+// every animated branch checks `prefersReducedMotion()` and skips itself
+// entirely when the user asked for less motion (design redesign01).
+
+function prefersReducedMotion() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+// ---- Device selector: progressive enhancement only (works with JS off) ----
 document.addEventListener("change", (event) => {
   const target = event.target;
   if (target instanceof HTMLSelectElement && target.name === "device") {
@@ -13,15 +25,136 @@ document.addEventListener("change", (event) => {
   }
 });
 
-// Chart initialization for `[data-chart]` elements (design part 3,
-// section 4 "ECharts"): `echarts.min.js` loads separately, deferred,
-// only on pages that need it (outages.html) -- `DOMContentLoaded`
-// fires only after every deferred script has run, so `window.echarts`
-// is guaranteed defined here regardless of script tag order in the
-// document.
+// ---- Glass nav: frosted bar intensifies once the page has scrolled ----
+function initNavScroll() {
+  const nav = document.querySelector(".glass-nav");
+  if (!nav) return;
+  const onScroll = () => {
+    nav.classList.toggle("is-scrolled", window.scrollY > 8);
+  };
+  onScroll();
+  window.addEventListener("scroll", onScroll, { passive: true });
+}
 
-function prefersReducedMotion() {
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+// ---- Scroll reveal: fade-up with per-group stagger, IntersectionObserver ----
+function revealGroup(items) {
+  items.forEach((el, i) => {
+    el.style.transitionDelay = i * 70 + "ms";
+    el.classList.add("is-visible");
+  });
+}
+
+function initReveal(root = document) {
+  const items = Array.from(root.querySelectorAll(".reveal:not(.is-visible)"));
+  if (!items.length) return;
+
+  if (prefersReducedMotion() || !("IntersectionObserver" in window)) {
+    items.forEach((el) => el.classList.add("is-visible"));
+    return;
+  }
+
+  // Stagger within each reveal "group" (siblings sharing a parent), not
+  // globally — a bento row staggers together, not the whole page.
+  const groups = new Map();
+  items.forEach((el) => {
+    const parent = el.parentElement;
+    if (!groups.has(parent)) groups.set(parent, []);
+    groups.get(parent).push(el);
+  });
+
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          const group = groups.get(entry.target.parentElement) || [entry.target];
+          revealGroup(group);
+          group.forEach((el) => observer.unobserve(el));
+        }
+      });
+    },
+    { threshold: 0.01, rootMargin: "0px 0px 80px 0px" }
+  );
+  items.forEach((el) => observer.observe(el));
+}
+
+// ---- Activity ring: the SVG circle is already server-rendered at its
+// correct final `stroke-dashoffset` (CSP-safe SVG presentation
+// attributes, not an inline `style`), so the page is correct and fully
+// informative with JS disabled or reduced motion requested. With motion
+// allowed, this collapses the ring to empty and animates it back in via
+// CSSOM once it scrolls into view — the same "fill in" moment the
+// design mockup specifies, layered on top of an already-correct page
+// rather than depending on JS to render the number at all. ----
+function initRings() {
+  if (prefersReducedMotion() || !("IntersectionObserver" in window)) return;
+  const hosts = document.querySelectorAll("[data-ring-offset]");
+  const io = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        const host = entry.target;
+        const progress = host.querySelector(".ring-progress");
+        const track = progress && progress.getAttribute("stroke-dasharray");
+        if (progress && track) {
+          const target = host.dataset.ringOffset;
+          progress.style.transitionDuration = "0.001ms";
+          progress.setAttribute("stroke-dashoffset", track);
+          requestAnimationFrame(() => {
+            progress.style.removeProperty("transition-duration");
+            progress.setAttribute("stroke-dashoffset", target);
+          });
+        }
+        io.unobserve(host);
+      });
+    },
+    { threshold: 0.4 }
+  );
+  hosts.forEach((host) => io.observe(host));
+}
+
+// ---- Gap/legacy review: re-run reveal + ring + chart init on content
+// htmx swaps in (the gap-review list, a confirmed/rejected row) so newly
+// inserted markup animates in the same way the initial page load does. ----
+document.body.addEventListener("htmx:afterSettle", (event) => {
+  initReveal(event.target instanceof Element ? event.target : document);
+  initRings();
+  initCharts();
+});
+
+// ---- ECharts restyle: dark-theme colors, glass tooltip, smooth lines —
+// design part 3 "ECharts" / redesign01. `echarts.min.js` loads
+// separately, deferred, only on pages that need it — `DOMContentLoaded`
+// fires only after every deferred script has run, so `window.echarts` is
+// guaranteed defined here regardless of script tag order in the document.
+
+const CHART_COLOR = {
+  present: "#30d158",
+  absent: "#ff6b4a",
+  unknown: "#9a9aa0",
+  cool: "#64d2ff",
+  warm: "#30d158",
+  solar: "#ffd60a",
+  text: "rgba(245,245,247,0.85)",
+  textMuted: "rgba(245,245,247,0.5)",
+  axisLine: "rgba(255,255,255,0.08)",
+  splitLine: "rgba(255,255,255,0.06)",
+};
+
+const CHART_TOOLTIP_BASE = {
+  backgroundColor: "rgba(22,22,26,0.88)",
+  borderWidth: 0,
+  borderRadius: 14,
+  padding: [10, 14],
+  textStyle: { color: CHART_COLOR.text, fontFamily: "Inter, sans-serif", fontSize: 12 },
+  extraCssText:
+    "backdrop-filter: blur(16px) saturate(160%); -webkit-backdrop-filter: blur(16px) saturate(160%); box-shadow: 0 20px 48px -12px rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.08);",
+};
+
+function chartGradient(colorTop, colorBottom) {
+  return new window.echarts.graphic.LinearGradient(0, 0, 0, 1, [
+    { offset: 0, color: colorTop },
+    { offset: 1, color: colorBottom },
+  ]);
 }
 
 function readChartJsonData(el) {
@@ -40,11 +173,11 @@ function readChartJsonData(el) {
   }
 }
 
-// The heatmap endpoint (`/api/v1/outages/heatmap`) exposes two
-// independent marginal distributions (hour-of-day, day-of-week), never
-// a joint matrix -- rendered here as two 1-row heatmap strips, not a
-// fabricated weekday-by-hour grid. Below 600px, the strips transpose
-// (rows become columns) so hour/weekday labels stay legible on a phone.
+// The heatmap endpoint exposes two independent marginal distributions
+// (hour-of-day, weekday), never a joint matrix — rendered here as two
+// 1-row heatmap strips, not a fabricated weekday-by-hour grid. Below
+// 600px the strips transpose (rows become columns) so labels stay
+// legible on a phone.
 function initHeatmapChart(el) {
   const data = readChartJsonData(el);
   if (!data) {
@@ -60,42 +193,135 @@ function initHeatmapChart(el) {
   const chart = window.echarts.init(el, null, { renderer: "svg" });
   chart.setOption({
     animation: !prefersReducedMotion(),
-    tooltip: {},
-    grid: { containLabel: true },
-    xAxis: { type: "category", data: narrow ? [0, 1] : undefined },
-    yAxis: { type: "category", data: narrow ? undefined : [0, 1] },
-    visualMap: { min: 0, max: Math.max(1, ...cells.map((cell) => cell[2])), show: false },
-    series: [{ type: "heatmap", data: cells }],
+    animationDuration: 600,
+    animationEasing: "cubicOut",
+    tooltip: {
+      ...CHART_TOOLTIP_BASE,
+      formatter: (p) => {
+        const [x, y, v] = p.data;
+        const isHour = y === 0;
+        const label = isHour ? x + ":00" : data.weekday_labels ? data.weekday_labels[x] : x;
+        return label + "<br/><strong>" + v + "</strong>";
+      },
+    },
+    grid: { containLabel: true, left: 8, right: 8, top: 8, bottom: narrow ? 8 : 24 },
+    xAxis: {
+      type: "category",
+      data: narrow ? [0, 1] : undefined,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { show: false },
+      splitLine: { show: false },
+    },
+    yAxis: {
+      type: "category",
+      data: narrow ? undefined : [0, 1],
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { show: false },
+      splitLine: { show: false },
+    },
+    visualMap: {
+      min: 0,
+      max: Math.max(1, ...cells.map((cell) => cell[2])),
+      show: false,
+      inRange: { color: ["rgba(255,107,74,0.07)", CHART_COLOR.absent] },
+    },
+    series: [
+      {
+        type: "heatmap",
+        data: cells,
+        itemStyle: { borderRadius: 6, borderColor: "rgba(0,0,0,0.5)", borderWidth: 3 },
+        emphasis: { itemStyle: { shadowBlur: 12, shadowColor: "rgba(255,107,74,0.5)" } },
+      },
+    ],
   });
   window.addEventListener("resize", () => chart.resize());
 }
 
 // The mains-strip chart is client-fetched from its own `data-src`
-// (design part 3 "ECharts": the UI dogfoods the public API) and
-// downsampled with `lttb` so a long range stays smooth to render.
+// (design part 3 "ECharts": the UI dogfoods the public API). Rendered as
+// a custom series of colored rects spanning each segment's exact time
+// range, full-height, so the strip reads as "solid when present, cut on
+// a confirmed outage, hatched when genuinely unknown" — never a
+// height/area encoding that could be mistaken for a magnitude.
 function initMainsStripChart(el) {
   const src = el.dataset.src;
   if (!src) {
     return;
   }
-  const stateValue = { present: 1, unknown: 0.5, absent: 0 };
+  const fillFor = { present: CHART_COLOR.present, absent: CHART_COLOR.absent, unknown: CHART_COLOR.unknown };
   fetch(src)
     .then((response) => response.json())
     .then((body) => {
-      const points = body.series.map(([start, , state]) => [start * 1000, stateValue[state]]);
+      const points = body.series;
+      const rangeStart = points.length ? points[0][0] * 1000 : undefined;
+      const rangeEnd = points.length ? points[points.length - 1][1] * 1000 : undefined;
+      const data = points.map(([start, end, state]) => ({
+        value: [start * 1000, end * 1000, state],
+        itemStyle:
+          state === "unknown"
+            ? {
+                color: fillFor[state],
+                opacity: 0.4,
+                decal: {
+                  symbol: "line",
+                  dashArrayX: [1, 0],
+                  dashArrayY: [4, 4],
+                  rotation: Math.PI / 4,
+                  color: "rgba(255,255,255,0.35)",
+                },
+              }
+            : { color: fillFor[state], opacity: state === "present" ? 0.9 : 0.95 },
+      }));
       const chart = window.echarts.init(el, null, { renderer: "svg" });
       chart.setOption({
         animation: !prefersReducedMotion(),
-        tooltip: {},
-        xAxis: { type: "time" },
+        animationDuration: 500,
+        animationEasing: "cubicOut",
+        tooltip: {
+          ...CHART_TOOLTIP_BASE,
+          formatter: (p) => {
+            const [start, end, state] = p.data.value;
+            const fmt = (ts) =>
+              new Date(ts).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+            return fmt(start) + " – " + fmt(end) + "<br/><strong>" + state + "</strong>";
+          },
+        },
+        grid: { left: 8, right: 8, top: 16, bottom: 28, containLabel: true },
+        xAxis: {
+          type: "time",
+          min: rangeStart,
+          max: rangeEnd,
+          axisLine: { lineStyle: { color: CHART_COLOR.axisLine } },
+          axisTick: { show: false },
+          // hideOverlap: ECharts drops whichever auto-generated time ticks
+          // would collide instead of letting them crowd together — needed
+          // at mobile widths where adjacent date labels would overlap.
+          axisLabel: { color: CHART_COLOR.textMuted, fontSize: 11, hideOverlap: true },
+          splitLine: { show: false },
+        },
         yAxis: { show: false, min: 0, max: 1 },
         series: [
           {
-            type: "line",
-            step: "end",
-            showSymbol: false,
-            sampling: "lttb",
-            data: points,
+            type: "custom",
+            renderItem: (params, api) => {
+              const start = api.value(0);
+              const end = api.value(1);
+              const p1 = api.coord([start, 0]);
+              const p2 = api.coord([end, 1]);
+              return {
+                type: "rect",
+                shape: {
+                  x: p1[0],
+                  y: Math.min(p1[1], p2[1]),
+                  width: Math.max(1, p2[0] - p1[0]),
+                  height: Math.abs(p1[1] - p2[1]),
+                },
+                style: api.style(),
+              };
+            },
+            data,
           },
         ],
       });
@@ -107,12 +333,10 @@ function initMainsStripChart(el) {
 }
 
 // The battery charge (SoC) line is client-fetched from its own
-// `data-src` (`/api/v1/battery/series`, battery requirement "Charge
-// History"), matching the mains-strip chart's own fetch-then-render
-// pattern. `point.soc` is `null` on a sample that never reported a
-// charge reading -- left as a `null` data point rather than coerced to
-// `0`, so ECharts breaks the line there instead of drawing a fabricated
-// drop to empty.
+// `data-src` (battery requirement "Charge History"). `point.soc` is
+// `null` on a sample that never reported a charge reading — left as a
+// `null` data point rather than coerced to `0`, so ECharts breaks the
+// line there instead of drawing a fabricated drop to empty.
 function initSocLineChart(el) {
   const src = el.dataset.src;
   if (!src) {
@@ -125,14 +349,44 @@ function initSocLineChart(el) {
       const chart = window.echarts.init(el, null, { renderer: "svg" });
       chart.setOption({
         animation: !prefersReducedMotion(),
-        tooltip: {},
-        xAxis: { type: "time" },
-        yAxis: { min: 0, max: 100 },
+        animationDuration: 900,
+        animationEasing: "cubicOut",
+        tooltip: {
+          ...CHART_TOOLTIP_BASE,
+          trigger: "axis",
+          formatter: (params) => {
+            const p = params[0];
+            return (
+              new Date(p.data[0]).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) +
+              "<br/><strong>" + p.data[1] + "%</strong>"
+            );
+          },
+        },
+        grid: { left: 8, right: 12, top: 16, bottom: 28, containLabel: true },
+        xAxis: {
+          type: "time",
+          axisLine: { lineStyle: { color: CHART_COLOR.axisLine } },
+          axisTick: { show: false },
+          axisLabel: { color: CHART_COLOR.textMuted, fontSize: 11, hideOverlap: true },
+          splitLine: { show: false },
+        },
+        yAxis: {
+          min: 0,
+          max: 100,
+          axisLine: { show: false },
+          axisTick: { show: false },
+          axisLabel: { color: CHART_COLOR.textMuted, fontSize: 11, formatter: "{value}%" },
+          splitLine: { lineStyle: { color: CHART_COLOR.splitLine } },
+        },
         series: [
           {
             type: "line",
             showSymbol: false,
             sampling: "lttb",
+            smooth: 0.3,
+            connectNulls: false,
+            lineStyle: { width: 3, color: chartGradient(CHART_COLOR.cool, CHART_COLOR.warm) },
+            areaStyle: { color: chartGradient("rgba(100,210,255,0.28)", "rgba(48,209,88,0.02)") },
             data: points,
           },
         ],
@@ -144,11 +398,9 @@ function initSocLineChart(el) {
     });
 }
 
-// The battery cycle-count / state-of-health trend is client-fetched
-// from its own `data-src` (`/api/v1/battery/trends`, battery
-// requirement "Cycle Count and State-of-Health Trends") -- two series
-// on independent y-axes, since a cycle count and a SoH percentage share
-// no common scale.
+// The battery cycle-count / state-of-health trend is client-fetched from
+// its own `data-src` — two series on independent y-axes, since a cycle
+// count and a SoH percentage share no common scale.
 function initBatteryTrendChart(el) {
   const src = el.dataset.src;
   if (!src) {
@@ -163,17 +415,66 @@ function initBatteryTrendChart(el) {
       const chart = window.echarts.init(el, null, { renderer: "svg" });
       chart.setOption({
         animation: !prefersReducedMotion(),
-        tooltip: { trigger: "axis" },
-        legend: {},
-        grid: { containLabel: true },
-        xAxis: { type: "category", data: days },
+        animationDuration: 800,
+        animationEasing: "cubicOut",
+        tooltip: { ...CHART_TOOLTIP_BASE, trigger: "axis" },
+        // No built-in echarts legend: the chart card's own `.legend-row`
+        // (styled to match the design system) already labels the two
+        // series — a second, differently-styled legend would duplicate it.
+        grid: { left: 8, right: 8, top: 16, bottom: 28, containLabel: true },
+        xAxis: {
+          type: "category",
+          data: days,
+          axisLine: { lineStyle: { color: CHART_COLOR.axisLine } },
+          axisTick: { show: false },
+          // interval:"auto" + hideOverlap: let ECharts pick a tick density
+          // that actually fits the rendered width instead of a fixed
+          // interval, which overlaps into unreadable mush on mobile.
+          axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10, interval: "auto", hideOverlap: true },
+          splitLine: { show: false },
+        },
         yAxis: [
-          { type: "value", name: "cycles" },
-          { type: "value", name: "SoH %", min: 0, max: 100 },
+          {
+            type: "value",
+            name: "cycles",
+            nameTextStyle: { color: CHART_COLOR.textMuted, fontSize: 10 },
+            axisLine: { show: false },
+            axisTick: { show: false },
+            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10 },
+            splitLine: { lineStyle: { color: CHART_COLOR.splitLine } },
+          },
+          {
+            type: "value",
+            name: "SoH %",
+            min: 0,
+            max: 100,
+            nameTextStyle: { color: CHART_COLOR.textMuted, fontSize: 10 },
+            axisLine: { show: false },
+            axisTick: { show: false },
+            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10 },
+            splitLine: { show: false },
+          },
         ],
         series: [
-          { name: "cycles", type: "line", yAxisIndex: 0, data: cycles },
-          { name: "SoH", type: "line", yAxisIndex: 1, data: soh },
+          {
+            name: "cycles",
+            type: "line",
+            yAxisIndex: 0,
+            showSymbol: false,
+            smooth: 0.3,
+            lineStyle: { width: 2, color: CHART_COLOR.solar },
+            data: cycles,
+          },
+          {
+            name: "SoH",
+            type: "line",
+            yAxisIndex: 1,
+            showSymbol: false,
+            smooth: 0.3,
+            lineStyle: { width: 2.5, color: CHART_COLOR.warm },
+            areaStyle: { color: chartGradient("rgba(48,209,88,0.22)", "rgba(48,209,88,0)") },
+            data: soh,
+          },
         ],
       });
       window.addEventListener("resize", () => chart.resize());
@@ -204,6 +505,11 @@ function initCharts() {
   });
 }
 
-document.addEventListener("DOMContentLoaded", initCharts);
-// Design part 3 "ECharts": "charts re-init on htmx:afterSettle".
-document.body.addEventListener("htmx:afterSettle", initCharts);
+document.addEventListener("DOMContentLoaded", () => {
+  initNavScroll();
+  initReveal();
+  initRings();
+  initCharts();
+});
+// Design part 3 "ECharts": "charts re-init on htmx:afterSettle" (handled
+// together with reveal/ring re-init above).

@@ -1,34 +1,62 @@
 <!doctype html>
-<html lang="{{ html_lang }}" data-theme="auto">
+<html lang="{{ html_lang }}" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="htmx-config" content='{"allowEval": false, "includeIndicatorStyles": false}'>
   <title>{% block title %}{{ t('app.name') }}{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/vendor/htmx.min.js" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body hx-boost="true">
+  {#
+    Nav items are a single list literal here, not one hardcoded <a> per
+    page (visual-QA batch fix01, fix 3's original defect class) -- adding
+    a page later (energy, grid) is a one-line addition to this list, not
+    a template-wide edit. `active_nav` comes from each page route's
+    template context (presentation-only, e.g. "overview"/"outages") so
+    the current page gets `aria-current="page"` and its accent underline.
+  #}
+  {% set nav_items = [
+    {"key": "overview", "href": "/", "label": t('nav.overview')},
+    {"key": "outages", "href": "/outages", "label": t('outages.page.title')},
+    {"key": "battery", "href": "/battery", "label": t('battery.page.title')},
+  ] %}
+  <div class="ambient" aria-hidden="true">
+    <div class="ambient__spot ambient__spot--1"></div>
+    <div class="ambient__spot ambient__spot--2"></div>
+    <div class="ambient__spot ambient__spot--3"></div>
+  </div>
   <a class="skip-link" href="#main">{{ t('common.skip_to_content') }}</a>
-  <header class="site-header">
-    <p class="site-header__brand">{{ t('app.name') }}</p>
-    <form class="lang-switcher" method="post" action="/preferences">
-      <input type="hidden" name="lang" value="en">
-      <button type="submit" class="lang-switcher__button" {% if lang == 'en' %}aria-current="true"{% endif %}>EN</button>
-    </form>
-    <form class="lang-switcher" method="post" action="/preferences">
-      <input type="hidden" name="lang" value="es">
-      <button type="submit" class="lang-switcher__button" {% if lang == 'es' %}aria-current="true"{% endif %}>ES</button>
-    </form>
+  <header class="glass-nav">
+    <div class="glass-nav__bar">
+      <a class="glass-nav__brand" href="/">
+        <span class="glass-nav__brand-mark" aria-hidden="true"></span>
+        {{ t('app.name') }}
+      </a>
+      <nav class="glass-nav__links" aria-label="{{ t('nav.label') }}">
+        {% for item in nav_items %}
+        <a href="{{ item.href }}"{% if (active_nav | default('')) == item.key %} aria-current="page"{% endif %}>{{ item.label }}</a>
+        {% endfor %}
+      </nav>
+      <div class="glass-nav__lang" role="group" aria-label="Language">
+        <form method="post" action="/preferences">
+          <input type="hidden" name="lang" value="en">
+          <button type="submit" class="glass-nav__lang-btn" {% if lang == 'en' %}aria-current="true"{% endif %}>EN</button>
+        </form>
+        <form method="post" action="/preferences">
+          <input type="hidden" name="lang" value="es">
+          <button type="submit" class="glass-nav__lang-btn" {% if lang == 'es' %}aria-current="true"{% endif %}>ES</button>
+        </form>
+      </div>
+    </div>
   </header>
-  <nav class="site-nav" aria-label="{{ t('nav.label') }}">
-    <a href="/">{{ t('nav.overview') }}</a>
-    <a href="/outages">{{ t('outages.page.title') }}</a>
-    <a href="/battery">{{ t('battery.page.title') }}</a>
-  </nav>
   <main id="main">
-    {% block content %}{% endblock %}
+    <div class="shell">
+      {% block content %}{% endblock %}
+    </div>
   </main>
 </body>
 </html>

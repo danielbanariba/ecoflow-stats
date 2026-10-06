@@ -340,7 +340,17 @@ def test_the_overview_shows_real_power_flows_battery_health_and_outage_tiles(
         assert "90 min to full" in html
         assert "97.5%" in html  # state of health
         assert ">42<" in html  # cycles
-        assert "600s" in html  # longest outage == total downtime (one 600s event)
+        # C-01 (qa-report-ui-01.md): a raw second count ("600s") used to
+        # be shown instead of a human duration -- a 600s (10 min) outage
+        # is both the longest outage and the total downtime here.
+        assert "10 min" in html
+        # C-02 (qa-report-ui-01.md): the "Last update" tile used to
+        # render the full "YYYY-MM-DD HH:MM" even for a sample from
+        # today's own local day (the sample is `_NOW_TS - 60`, still
+        # 2026-01-01 under the default UTC timezone) -- a defect that
+        # reverted to that full format would render exactly this string.
+        assert "2026-01-01 11:59" not in html
+        assert "11:59" in html
     finally:
         application.database.close()
 

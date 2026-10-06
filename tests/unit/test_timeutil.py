@@ -14,6 +14,7 @@ import pytest
 
 from ecoflow_stats.timeutil import (
     day_bounds,
+    duration_parts,
     local_day,
     relative_time_unit,
     split_by_local_days,
@@ -131,3 +132,39 @@ def test_relative_time_unit_clamps_a_negative_age_to_zero() -> None:
     unclamped would render a nonsensical negative count instead of "0 s
     ago"."""
     assert relative_time_unit(-5) == ("time.seconds_ago", 0)
+
+
+def test_duration_parts_picks_the_coarsest_1_to_2_non_zero_units_biggest_first() -> None:
+    """C-01 (qa-report-ui-01.md): the overview's "Longest outage"/"Time
+    on battery" tiles and the outages page's summary showed a raw
+    second count (e.g. "25200s") instead of a human duration like
+    "7 h". Pass-1/Pass-2: a defect that stopped cascading too early
+    (e.g. always expressing everything in minutes) or too late (always
+    emitting all 4 units down to seconds) would fail these exact
+    examples, hand-verified against the reported defect's own numbers."""
+    assert duration_parts(25_200) == [("hours", 7)]
+    assert duration_parts(5_100) == [("hours", 1), ("minutes", 25)]
+    assert duration_parts(183_600) == [("days", 2), ("hours", 3)]
+
+
+def test_duration_parts_of_exactly_zero_is_an_explicit_zero_not_an_empty_list() -> None:
+    """ "No downtime" is a real, non-missing value (Named Defect "missing
+    read as zero" cousin, in reverse: here zero really is correct and
+    must still render something, not collapse to nothing)."""
+    assert duration_parts(0) == [("seconds", 0)]
+
+
+def test_duration_parts_caps_at_two_units_even_when_all_four_are_non_zero() -> None:
+    """A defect that kept appending every non-zero unit instead of
+    stopping at 2 would show "1 d 1 h 1 min 1 s" instead of the bounded
+    "1 d 1 h" this function must stop at."""
+    assert duration_parts(86_400 + 3_600 + 60 + 1) == [("days", 1), ("hours", 1)]
+
+
+def test_duration_parts_never_carries_a_bare_seconds_remainder_past_two_units() -> None:
+    assert duration_parts(45) == [("seconds", 45)]
+    assert duration_parts(90) == [("minutes", 1), ("seconds", 30)]
+
+
+def test_duration_parts_clamps_a_negative_duration_to_zero() -> None:
+    assert duration_parts(-5) == [("seconds", 0)]

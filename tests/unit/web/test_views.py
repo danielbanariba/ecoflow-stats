@@ -11,6 +11,7 @@ page show" is provable with plain dataclasses.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from itertools import pairwise
 
 from ecoflow_stats.battery.stats import BatteryPowerStatus
@@ -28,6 +29,8 @@ from ecoflow_stats.web.views import (
     build_outages_summary,
     build_outages_view_model,
     build_overview_view_model,
+    format_compact_local_dt,
+    format_duration,
     format_local_dt,
 )
 
@@ -133,6 +136,8 @@ def test_a_device_with_no_recorded_sample_reports_no_data_not_a_fabricated_readi
         selected_device_id=1,
         status=status,
         outages_30d=_NO_OUTAGES_30D,
+        tz="UTC",
+        now_ts=0,
     )
 
     assert view.has_data is False
@@ -158,6 +163,8 @@ def test_a_fresh_sample_reports_data_with_its_grid_state_and_charge() -> None:
         selected_device_id=1,
         status=status,
         outages_30d=_NO_OUTAGES_30D,
+        tz="UTC",
+        now_ts=1000,
     )
 
     assert view.has_data is True
@@ -185,6 +192,8 @@ def test_a_stale_sample_is_reported_stale_alongside_its_age() -> None:
         selected_device_id=1,
         status=status,
         outages_30d=_NO_OUTAGES_30D,
+        tz="UTC",
+        now_ts=1000,
     )
 
     assert view.stale is True
@@ -223,6 +232,8 @@ def test_a_fresh_sample_reports_power_flows_battery_health_and_last_update() -> 
         selected_device_id=1,
         status=status,
         outages_30d=_NO_OUTAGES_30D,
+        tz="UTC",
+        now_ts=5000,
     )
 
     assert view.last_update_ts == 5000
@@ -234,6 +245,70 @@ def test_a_fresh_sample_reports_power_flows_battery_health_and_last_update() -> 
     assert view.battery_power == BatteryPowerStatus(
         direction="charging", net_w=150.0, remaining_min=90
     )
+
+
+def _utc_ts(year: int, month: int, day: int, hour: int, minute: int = 0, second: int = 0) -> int:
+    return int(datetime(year, month, day, hour, minute, second, tzinfo=UTC).timestamp())
+
+
+def test_last_update_is_today_compares_local_calendar_days_not_utc_ones() -> None:
+    """C-02 (qa-report-ui-01.md), Pass-1/Pass-2: a defect that compared
+    UTC calendar days instead of the configured timezone's local days
+    would wrongly report "not today" here -- `now` and the sample fall
+    on different UTC days (2026-01-02 vs 2026-01-01) but the SAME local
+    day under America/Tegucigalpa (UTC-6): now is 2026-01-01 20:00
+    local, the sample is 2026-01-01 17:00 local."""
+    records = (_device(1, "BA31ZEB1SF7F0001"),)
+    now_ts = _utc_ts(2026, 1, 2, 2, 0, 0)  # 2026-01-01 20:00 at America/Tegucigalpa
+    sample_ts = _utc_ts(2026, 1, 1, 23, 0, 0)  # 2026-01-01 17:00 at America/Tegucigalpa
+    status = DeviceStatus(
+        device_id=1,
+        ts=sample_ts,
+        age_s=0,
+        stale=False,
+        grid="present",
+        reading=Reading(soc=50),
+        outage=_NO_OUTAGE,
+    )
+
+    view = build_overview_view_model(
+        device_records=records,
+        selected_device_id=1,
+        status=status,
+        outages_30d=_NO_OUTAGES_30D,
+        tz="America/Tegucigalpa",
+        now_ts=now_ts,
+    )
+
+    assert view.last_update_is_today is True
+
+
+def test_last_update_from_a_previous_local_day_is_reported_as_not_today() -> None:
+    """Pass-2 target: proves this is not hardcoded `True` -- a sample
+    from the local day before `now` must be reported as not today."""
+    records = (_device(1, "BA31ZEB1SF7F0001"),)
+    now_ts = _utc_ts(2026, 1, 2, 2, 0, 0)  # 2026-01-01 20:00 at America/Tegucigalpa
+    sample_ts = _utc_ts(2025, 12, 31, 23, 0, 0)  # 2025-12-31 17:00 at America/Tegucigalpa
+    status = DeviceStatus(
+        device_id=1,
+        ts=sample_ts,
+        age_s=0,
+        stale=False,
+        grid="present",
+        reading=Reading(soc=50),
+        outage=_NO_OUTAGE,
+    )
+
+    view = build_overview_view_model(
+        device_records=records,
+        selected_device_id=1,
+        status=status,
+        outages_30d=_NO_OUTAGES_30D,
+        tz="America/Tegucigalpa",
+        now_ts=now_ts,
+    )
+
+    assert view.last_update_is_today is False
 
 
 def test_a_device_with_no_recorded_sample_reports_every_new_field_as_unavailable() -> None:
@@ -256,6 +331,8 @@ def test_a_device_with_no_recorded_sample_reports_every_new_field_as_unavailable
         selected_device_id=1,
         status=status,
         outages_30d=_NO_OUTAGES_30D,
+        tz="UTC",
+        now_ts=0,
     )
 
     assert view.last_update_ts is None
@@ -292,6 +369,8 @@ def test_the_30_day_outage_summary_is_propagated_from_the_caller_unmodified() ->
         selected_device_id=1,
         status=status,
         outages_30d=summary,
+        tz="UTC",
+        now_ts=0,
     )
 
     assert view.outages_30d == summary
@@ -422,6 +501,48 @@ def test_format_local_dt_renders_a_numeric_local_time_string_in_the_configured_z
 
     assert utc_rendered == "2023-11-14 22:20"
     assert local_rendered == "2023-11-14 16:20"
+
+
+def test_format_compact_local_dt_shows_just_the_time_when_not_told_to_show_the_date() -> None:
+    """C-02 (qa-report-ui-01.md): the overview's "Last update" tile
+    showed a full "YYYY-MM-DD HH:MM" (`format_local_dt`'s own shape)
+    even though the sample is almost always from today -- this compact
+    formatter must render a bare time instead when the caller says the
+    date need not be shown."""
+    ts = 1_700_000_400  # 2023-11-14 22:20:00 UTC == 16:20 at America/Tegucigalpa
+
+    assert format_compact_local_dt(ts, "America/Tegucigalpa", show_date=False) == "16:20"
+
+
+def test_format_compact_local_dt_prefixes_month_and_day_when_told_to_show_the_date() -> None:
+    """Pass-2 target: a defect that always rendered the bare time
+    regardless of `show_date` would make a reading from a previous day
+    indistinguishable from one taken minutes ago."""
+    ts = 1_700_000_400  # 2023-11-14 22:20:00 UTC == 16:20 at America/Tegucigalpa
+
+    assert format_compact_local_dt(ts, "America/Tegucigalpa", show_date=True) == "11-14 16:20"
+
+
+def _unit_catalog(key: str) -> str:
+    return {
+        "duration.unit.days": "{count} d",
+        "duration.unit.hours": "{count} h",
+        "duration.unit.minutes": "{count} min",
+        "duration.unit.seconds": "{count} s",
+    }[key]
+
+
+def test_format_duration_joins_duration_parts_through_the_translator() -> None:
+    """C-01 (qa-report-ui-01.md): the overview's "Longest outage"/"Time
+    on battery" tiles and the outages page's summary showed a raw
+    second count (e.g. "25200s") instead of a human duration. Pass-1/
+    Pass-2: a defect that formatted the raw seconds directly (skipping
+    `duration_parts`), or picked the wrong i18n key per unit, would
+    fail these exact examples from the reported defect."""
+    assert format_duration(25_200, _unit_catalog) == "7 h"
+    assert format_duration(5_100, _unit_catalog) == "1 h 25 min"
+    assert format_duration(183_600, _unit_catalog) == "2 d 3 h"
+    assert format_duration(0, _unit_catalog) == "0 s"
 
 
 def test_build_outages_view_model_assembles_every_part_without_dropping_fields() -> None:

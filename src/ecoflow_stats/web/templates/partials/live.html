@@ -103,7 +103,7 @@
 </div>
 <div class="tile tile--span-4 reveal">
   <p class="stat-tile__label">{{ t('overview.tile.last_update') }}</p>
-  <p class="stat-tile__value">{% if view.last_update_ts is not none %}{{ format_local_dt(view.last_update_ts, tz) }}{% else %}{{ t('common.unavailable') }}{% endif %}</p>
+  <p class="stat-tile__value">{% if view.last_update_ts is not none %}{{ format_compact_local_dt(view.last_update_ts, tz, not view.last_update_is_today) }}{% else %}{{ t('common.unavailable') }}{% endif %}</p>
 </div>
 <div class="tile tile--span-4 reveal">
   <p class="stat-tile__label">{{ t('overview.tile.outages_30d') }}</p>
@@ -111,11 +111,11 @@
 </div>
 <div class="tile tile--span-4 reveal">
   <p class="stat-tile__label">{{ t('overview.tile.longest_outage') }}</p>
-  <p class="stat-tile__value stat-tile--accent-outage">{% if view.outages_30d.longest_s is not none %}{{ t('outages.summary.seconds_value').format(seconds=view.outages_30d.longest_s) }}{% else %}{{ t('common.unavailable') }}{% endif %}</p>
+  <p class="stat-tile__value stat-tile--accent-outage">{% if view.outages_30d.longest_s is not none %}{{ format_duration(view.outages_30d.longest_s, t) }}{% else %}{{ t('common.unavailable') }}{% endif %}</p>
 </div>
 <div class="tile tile--span-4 reveal">
   <p class="stat-tile__label">{{ t('overview.tile.time_on_battery') }}</p>
-  <p class="stat-tile__value stat-tile--accent-grid">{{ t('outages.summary.seconds_value').format(seconds=view.outages_30d.total_downtime_s) }}</p>
+  <p class="stat-tile__value stat-tile--accent-grid">{{ format_duration(view.outages_30d.total_downtime_s, t) }}</p>
 </div>
 {% else %}
 <div class="tile tile--span-12 empty-state reveal" role="status">

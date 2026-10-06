@@ -73,6 +73,40 @@ def relative_time_unit(age_s: int) -> tuple[str, int]:
     return "time.days_ago", hours // 24
 
 
+_DURATION_UNITS: tuple[tuple[str, int], ...] = (
+    ("days", 86_400),
+    ("hours", 3_600),
+    ("minutes", 60),
+    ("seconds", 1),
+)
+
+
+def duration_parts(seconds: int) -> list[tuple[str, int]]:
+    """Break a duration in seconds into its 1-2 largest non-zero
+    calendar units, biggest first (C-01, qa-report-ui-01.md: the
+    overview's "Longest outage"/"Time on battery" tiles and the
+    outages page's summary showed a raw second count like
+    ``"25200s"`` instead of a human duration like ``"7 h"``).
+
+    Cascades days -> hours -> minutes -> seconds via `divmod`, keeping
+    only the first two units that turn out non-zero (so ``5100`` is
+    ``[("hours", 1), ("minutes", 25)]``, not a seconds remainder no one
+    needs). A negative duration (clock skew) clamps to zero, the same
+    discipline `relative_time_unit` already applies; an exact zero
+    renders as an explicit ``[("seconds", 0)]`` rather than an empty
+    list, since "no downtime" is a real, non-missing value.
+    """
+    remaining = max(0, seconds)
+    parts: list[tuple[str, int]] = []
+    for name, unit_s in _DURATION_UNITS:
+        value, remaining = divmod(remaining, unit_s)
+        if value:
+            parts.append((name, value))
+        if len(parts) == 2:
+            break
+    return parts or [("seconds", 0)]
+
+
 def split_by_local_days(start_ts: int, end_ts: int, tz: str) -> list[tuple[str, float]]:
     """Split the half-open interval ``[start_ts, end_ts)`` into the local
     calendar days (under ``tz``) it overlaps, each paired with the
@@ -101,4 +135,4 @@ def split_by_local_days(start_ts: int, end_ts: int, tz: str) -> list[tuple[str, 
     return shares
 
 
-__all__ = ["day_bounds", "local_day", "relative_time_unit", "split_by_local_days"]
+__all__ = ["day_bounds", "duration_parts", "local_day", "relative_time_unit", "split_by_local_days"]

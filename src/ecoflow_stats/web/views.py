@@ -24,9 +24,10 @@ from ecoflow_stats.battery.stats import (
     depth_of_discharge,
     summarize_battery_trend,
 )
+from ecoflow_stats.timeutil import duration_parts, local_day
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from ecoflow_stats.battery.stats import DailyBatteryTrend
     from ecoflow_stats.devices.reading import Reading
@@ -60,6 +61,12 @@ class OverviewViewModel:
     last_update_ts: int | None
     """The latest sample's own timestamp (UI-04/UI-05, qa-report-ui-01.md)
     -- `None` only when `has_data` is `False`, never a fabricated "now"."""
+    last_update_is_today: bool
+    """Whether `last_update_ts` falls on the viewer's configured local
+    calendar day (C-02, qa-report-ui-01.md) -- lets the template show a
+    bare `"HH:MM"` for the common case instead of always spelling out a
+    full date that is almost always today anyway. `False` when there is
+    no sample at all."""
     solar_in_w: float | None
     ac_in_w: float | None
     ac_out_w: float | None
@@ -107,6 +114,8 @@ def build_overview_view_model(
     selected_device_id: int,
     status: DeviceStatus,
     outages_30d: OutagesSummary,
+    tz: str,
+    now_ts: int,
 ) -> OverviewViewModel:
     """web-ui "Empty and Stale States Are Shown Explicitly": `has_data`
     is false only when the device has no recorded sample at all
@@ -116,6 +125,11 @@ def build_overview_view_model(
     `outages.aggregates`/`resolve` pipeline `outages_page` uses, over a
     fixed trailing 30-day window) -- this function only reshapes
     already-fetched data, it never queries storage on its own.
+
+    `tz`/`now_ts` are only used to decide `last_update_is_today` (C-02)
+    -- compared as local calendar days under `tz`, never as raw epoch
+    proximity, so a reading from early this local morning still counts
+    as "today" even hours after it was taken.
     """
     reading = status.reading
     return OverviewViewModel(
@@ -127,6 +141,9 @@ def build_overview_view_model(
         grid=status.grid,
         soc=reading.soc if reading is not None else None,
         last_update_ts=status.ts,
+        last_update_is_today=(
+            status.ts is not None and local_day(status.ts, tz) == local_day(now_ts, tz)
+        ),
         solar_in_w=reading.solar_in_w if reading is not None else None,
         ac_in_w=reading.ac_in_w if reading is not None else None,
         ac_out_w=reading.ac_out_w if reading is not None else None,
@@ -346,6 +363,39 @@ def format_local_dt(ts: int, tz: str) -> str:
     zone = ZoneInfo(tz)
     local = datetime.fromtimestamp(ts, tz=UTC).astimezone(zone)
     return local.strftime("%Y-%m-%d %H:%M")
+
+
+_DURATION_UNIT_KEYS = {
+    "days": "duration.unit.days",
+    "hours": "duration.unit.hours",
+    "minutes": "duration.unit.minutes",
+    "seconds": "duration.unit.seconds",
+}
+
+
+def format_duration(seconds: int, t: Callable[..., str]) -> str:
+    """Render a duration in seconds as a short, human-readable string
+    (`"7 h"`, `"1 h 25 min"`, `"2 d 3 h"`) instead of a raw second
+    count like `"25200s"` (C-01, qa-report-ui-01.md) -- the overview's
+    "Longest outage"/"Time on battery" tiles and the outages page's
+    summary `<dl>` all render a duration through this, over
+    `timeutil.duration_parts`'s cascaded units."""
+    return " ".join(
+        t(_DURATION_UNIT_KEYS[name]).format(count=value) for name, value in duration_parts(seconds)
+    )
+
+
+def format_compact_local_dt(ts: int, tz: str, show_date: bool) -> str:
+    """Render an epoch-second timestamp as a compact local time for the
+    overview's "Last update" tile (C-02, qa-report-ui-01.md): just
+    `"HH:MM"` when `show_date` is `False` (the sample is from today's
+    local calendar day), or `"MM-DD HH:MM"` when it is not -- never the
+    full `"YYYY-MM-DD HH:MM"` `format_local_dt` renders for the
+    mains-strip fallback table, which dwarfed this tile with a date
+    that is almost always today anyway."""
+    zone = ZoneInfo(tz)
+    local = datetime.fromtimestamp(ts, tz=UTC).astimezone(zone)
+    return local.strftime("%m-%d %H:%M") if show_date else local.strftime("%H:%M")
 
 
 def build_outages_view_model(

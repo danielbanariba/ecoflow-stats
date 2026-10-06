@@ -158,12 +158,16 @@ def test_the_page_renders_the_outage_summary(
 
         assert response.status_code == 200
         html = response.text
+        # C-01 (qa-report-ui-01.md): these used to be raw second counts
+        # ("5432s", "4321s", "2716s", "222s") instead of a human
+        # duration -- hand-verified against `duration_parts`'s own
+        # cascade (days -> hours -> minutes -> seconds, 2 units max).
         assert _dd_value(html, "Outage count") == "2"
-        assert _dd_value(html, "Total downtime") == "5432s"
-        assert _dd_value(html, "Longest outage") == "4321s"
-        assert _dd_value(html, "Mean duration") == "2716s"
+        assert _dd_value(html, "Total downtime") == "1 h 30 min"
+        assert _dd_value(html, "Longest outage") == "1 h 12 min"
+        assert _dd_value(html, "Mean duration") == "45 min 16 s"
         assert _dd_value(html, "Brief drops") == "1"
-        assert _dd_value(html, "Unknown time") == "222s"
+        assert _dd_value(html, "Unknown time") == "3 min 42 s"
     finally:
         application.database.close()
 

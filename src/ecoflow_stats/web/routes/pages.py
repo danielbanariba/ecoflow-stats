@@ -51,6 +51,8 @@ from ecoflow_stats.web.views import (
     build_outages_summary,
     build_outages_view_model,
     build_overview_view_model,
+    format_compact_local_dt,
+    format_duration,
     format_local_dt,
 )
 
@@ -65,6 +67,8 @@ if TYPE_CHECKING:
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 TEMPLATES = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 TEMPLATES.env.globals["format_local_dt"] = format_local_dt
+TEMPLATES.env.globals["format_duration"] = format_duration
+TEMPLATES.env.globals["format_compact_local_dt"] = format_compact_local_dt
 TEMPLATES.env.globals["relative_time_unit"] = relative_time_unit
 _CATALOGS = load_catalogs()
 _COOKIE_MAX_AGE_S = 365 * 24 * 60 * 60
@@ -189,6 +193,8 @@ def _live_view(
         selected_device_id=device_id,
         status=status,
         outages_30d=outages_30d,
+        tz=api_ctx.tz,
+        now_ts=range_end,
     )
 
 

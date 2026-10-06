@@ -26,18 +26,18 @@
     </div>
     <div class="stat-card reveal">
       <dt>{{ t('outages.summary.total_label') }}</dt>
-      <dd>{{ t('outages.summary.seconds_value').format(seconds=view.summary.total_downtime_s) }}</dd>
+      <dd>{{ format_duration(view.summary.total_downtime_s, t) }}</dd>
     </div>
     <div class="stat-card reveal">
       <dt>{{ t('outages.summary.longest_label') }}</dt>
       <dd>
-        {% if view.summary.longest_s is not none %}{{ t('outages.summary.seconds_value').format(seconds=view.summary.longest_s) }}{% else %}{{ t('common.unavailable') }}{% endif %}
+        {% if view.summary.longest_s is not none %}{{ format_duration(view.summary.longest_s, t) }}{% else %}{{ t('common.unavailable') }}{% endif %}
       </dd>
     </div>
     <div class="stat-card reveal">
       <dt>{{ t('outages.summary.mean_label') }}</dt>
       <dd>
-        {% if view.summary.mean_s is not none %}{{ t('outages.summary.seconds_value').format(seconds=view.summary.mean_s) }}{% else %}{{ t('common.unavailable') }}{% endif %}
+        {% if view.summary.mean_s is not none %}{{ format_duration(view.summary.mean_s, t) }}{% else %}{{ t('common.unavailable') }}{% endif %}
       </dd>
     </div>
     <div class="stat-card reveal">
@@ -46,7 +46,7 @@
     </div>
     <div class="stat-card reveal">
       <dt>{{ t('outages.summary.unknown_time_label') }}</dt>
-      <dd>{{ t('outages.summary.seconds_value').format(seconds=view.summary.unknown_time_s) }}</dd>
+      <dd>{{ format_duration(view.summary.unknown_time_s, t) }}</dd>
     </div>
   </dl>
 </section>

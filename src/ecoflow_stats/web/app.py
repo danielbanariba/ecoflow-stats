@@ -171,6 +171,7 @@ def _build_security_context(application: Application) -> SecurityContext:
         session_days=application.settings.session_days,
         now_s=lambda: int(application.clock.now().timestamp()),
         throttle=LoginThrottle(now=lambda: application.clock.now().timestamp()),
+        session_generation=application.session_generation,
     )
 
 

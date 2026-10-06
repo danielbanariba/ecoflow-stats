@@ -228,11 +228,13 @@ class SecurityContext:
     """SEC-03 (qa-report-data-01.md): bumped by `revoke_all_sessions` on
     every `/logout`, and mixed into `session_signing_key` -- the only
     state that needs to change for every previously issued session
-    token to stop verifying at once. Starts at `0`; a process restart
-    already revokes every session for a different reason entirely
-    (`app_secret` itself is fresh random bytes every `bootstrap.build`
-    call, never persisted to disk), so this field only needs to cover
-    the in-process, same-restart case logout actually requires."""
+    token to stop verifying at once. Defaults to `0` (a fresh database
+    that has never logged anything out), but `bootstrap.build` restores
+    the persisted value on every call (SEC-07, `storage.state
+    .get_session_generation`) -- `app_secret` is persisted the same
+    way, so neither this field nor the secret may reset to a default on
+    a restart without silently un-revoking an already-revoked
+    session."""
 
 
 def _signing_key(security: SecurityContext) -> bytes:

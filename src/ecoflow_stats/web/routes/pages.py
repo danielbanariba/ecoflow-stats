@@ -21,6 +21,7 @@ from ecoflow_stats.live_status.service import get_status
 from ecoflow_stats.outages.aggregates import compute_aggregates
 from ecoflow_stats.outages.resolve import resolve, unresolved_gaps
 from ecoflow_stats.storage.rollups import RollupStore
+from ecoflow_stats.storage.state import set_session_generation
 from ecoflow_stats.web.deps import (
     DEVICE_COOKIE,
     LANG_COOKIE,
@@ -448,9 +449,18 @@ def logout_submit(request: Request) -> RedirectResponse:
     clearing this browser's own cookie, so a copy of the session token
     taken before this call -- a stolen cookie, or just a back button on
     the same machine -- stops working immediately, not only after the
-    next process restart."""
+    next process restart.
+
+    SEC-07: the bumped generation is also persisted (same cross-context
+    `request.app.state.application` read `_rollup_store` already uses),
+    so a restart that happens before anyone logs back in does not
+    quietly reset the comparison value to `0` and un-revoke every
+    session this call just revoked."""
     security: SecurityContext = request.app.state.security
-    request.app.state.security = revoke_all_sessions(security)
+    security = revoke_all_sessions(security)
+    request.app.state.security = security
+    application = request.app.state.application
+    set_session_generation(application.database.writer, security.session_generation)
     response = RedirectResponse(url="/login", status_code=303)
     clear_session_cookie(response)
     return response

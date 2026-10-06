@@ -17,7 +17,6 @@ when `build()` runs.
 
 from __future__ import annotations
 
-import secrets
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -38,6 +37,7 @@ from ecoflow_stats.storage.failures import FailureLog
 from ecoflow_stats.storage.notifications import NotificationLedger
 from ecoflow_stats.storage.runs import RunLog
 from ecoflow_stats.storage.samples import SampleStore
+from ecoflow_stats.storage.state import get_or_create_secret, get_session_generation
 
 if TYPE_CHECKING:
     from ecoflow_stats.config import Settings
@@ -61,10 +61,19 @@ class Application:
     share. Not frozen: `database` and the stores hold live connections,
     and a later phase may need to replace `run_id` across a restart.
 
-    `secret` is a per-process random key (design, "Session":
-    `app_state.secret`), never derived from configuration -- it only
-    needs to be stable for the lifetime of this one running process, so
-    every session it signs is naturally revoked by a restart too.
+    `secret` is the persistent session/CSRF signing key (design,
+    "Session": `app_state.secret`; design D11: "changing the password
+    revokes sessions; restarting the process must not"). It is read
+    from (or, on first run, minted into) the `app_state` table via
+    `storage.state.get_or_create_secret`, so it is stable across
+    restarts of the same database, not just for the lifetime of one
+    running process.
+
+    `session_generation` is `/logout`'s own revocation counter (SEC-03,
+    `web.security.revoke_all_sessions`), read from the same `app_state`
+    table so a session `/logout` already revoked stays revoked across a
+    restart too, instead of a freshly-reset generation of `0`
+    un-revoking it the moment `secret` alone became persistent.
     """
 
     settings: Settings
@@ -83,6 +92,7 @@ class Application:
     notification_service: NotificationService | None
     live_outage_states: dict[int, LiveOutageState]
     secret: bytes
+    session_generation: int
 
 
 def build(
@@ -180,7 +190,8 @@ def build(
         collector_devices=collector_devices,
         notification_service=notification_service,
         live_outage_states=live_outage_states,
-        secret=secrets.token_bytes(32),
+        secret=bytes.fromhex(get_or_create_secret(database.writer)),
+        session_generation=get_session_generation(database.writer),
     )
 
 

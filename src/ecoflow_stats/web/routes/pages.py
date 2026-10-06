@@ -23,6 +23,13 @@ from ecoflow_stats.web.deps import (
     select_device_id,
 )
 from ecoflow_stats.web.i18n import SUPPORTED_LANGS, load_catalogs, translator
+from ecoflow_stats.web.security import (
+    SecurityContext,
+    clear_session_cookie,
+    issue_session_cookie,
+    safe_next_path,
+    verify_password,
+)
 from ecoflow_stats.web.views import build_overview_view_model
 
 if TYPE_CHECKING:
@@ -129,6 +136,51 @@ def set_preferences(request: Request, lang: str = Form(...)) -> RedirectResponse
     redirect = RedirectResponse(url=referer, status_code=303)
     redirect.set_cookie(LANG_COOKIE, effective_lang, max_age=_COOKIE_MAX_AGE_S, samesite="lax")
     return redirect
+
+
+@router.get("/login", response_class=HTMLResponse)
+def login_page(request: Request, next: str | None = None, error: bool = False) -> HTMLResponse:
+    """access-control "Optional Password Guards Every Route Except the
+    Health Check": the page `AccessControlMiddleware` redirects an
+    unauthenticated request to."""
+    ctx: PagesContext = request.app.state.pages
+    lang = _resolve_lang(request, ctx)
+    return TEMPLATES.TemplateResponse(
+        request,
+        "login.html",
+        {
+            "t": translator(lang, _CATALOGS),
+            "lang": lang,
+            "html_lang": html_lang(lang),
+            "next": safe_next_path(next),
+            "error": error,
+        },
+    )
+
+
+@router.post("/login")
+def login_submit(
+    request: Request, password: str = Form(...), next: str = Form("/")
+) -> RedirectResponse:
+    security: SecurityContext = request.app.state.security
+    target = safe_next_path(next)
+    address = request.client.host if request.client else "unknown"
+
+    if security.password is not None and security.throttle.allow(address):
+        if verify_password(password, security.password):
+            response = RedirectResponse(url=target, status_code=303)
+            issue_session_cookie(response, security, secure=request.url.scheme == "https")
+            return response
+        security.throttle.record_failure(address)
+
+    return RedirectResponse(url=f"/login?next={target}&error=1", status_code=303)
+
+
+@router.post("/logout")
+def logout_submit() -> RedirectResponse:
+    response = RedirectResponse(url="/login", status_code=303)
+    clear_session_cookie(response)
+    return response
 
 
 __all__ = ["PagesContext", "router"]

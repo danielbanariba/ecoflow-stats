@@ -31,7 +31,7 @@ from ecoflow_stats.web.routes.health import HealthContext
 from ecoflow_stats.web.routes.health import router as health_router
 from ecoflow_stats.web.routes.pages import PagesContext
 from ecoflow_stats.web.routes.pages import router as pages_router
-from ecoflow_stats.web.security import AccessControlMiddleware, SecurityContext
+from ecoflow_stats.web.security import AccessControlMiddleware, LoginThrottle, SecurityContext
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -127,6 +127,10 @@ def _build_security_context(application: Application) -> SecurityContext:
     return SecurityContext(
         password=application.settings.password,
         allowed_networks=application.settings.allowed_networks,
+        app_secret=application.secret,
+        session_days=application.settings.session_days,
+        now_s=lambda: int(application.clock.now().timestamp()),
+        throttle=LoginThrottle(now=lambda: application.clock.now().timestamp()),
     )
 
 

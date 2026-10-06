@@ -17,6 +17,7 @@ when `build()` runs.
 
 from __future__ import annotations
 
+import secrets
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -59,6 +60,11 @@ class Application:
     """Everything built from `Settings` that the server and the collector
     share. Not frozen: `database` and the stores hold live connections,
     and a later phase may need to replace `run_id` across a restart.
+
+    `secret` is a per-process random key (design, "Session":
+    `app_state.secret`), never derived from configuration -- it only
+    needs to be stable for the lifetime of this one running process, so
+    every session it signs is naturally revoked by a restart too.
     """
 
     settings: Settings
@@ -76,6 +82,7 @@ class Application:
     collector_devices: tuple[CollectorDevice, ...]
     notification_service: NotificationService | None
     live_outage_states: dict[int, LiveOutageState]
+    secret: bytes
 
 
 def build(
@@ -173,6 +180,7 @@ def build(
         collector_devices=collector_devices,
         notification_service=notification_service,
         live_outage_states=live_outage_states,
+        secret=secrets.token_bytes(32),
     )
 
 

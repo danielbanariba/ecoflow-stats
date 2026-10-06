@@ -6,9 +6,11 @@ The snapshot itself (copying and verifying the legacy sources) is the
 caller's responsibility (`panel_samples.make_snapshot`) — this module only
 ever reads from the paths it is given, never from the live legacy files.
 Recomputing outages/rollups from the newly-imported data is a later work
-unit (Phase 11): this run only stores the raw samples and the legacy
-outage-log events, and never touches a `derivations` row (that table does
-not exist yet).
+unit (the derive job and `outages.service.derive_outages`, Phase 11): this
+run only stores the raw samples and the legacy outage-log events, and
+marks outages dirty from the earliest imported sample so the next derive
+tick picks the new history up (history-import requirement: "Recomputed
+Events Are Authoritative Where the App's Own Data Overlaps").
 """
 
 from __future__ import annotations
@@ -26,6 +28,8 @@ if TYPE_CHECKING:
     from datetime import datetime
     from pathlib import Path
 
+    from ecoflow_stats.storage.derivations import DerivationStore
+
 
 def run_import(
     *,
@@ -36,9 +40,19 @@ def run_import(
     import_id: int,
     writer_conn: sqlite3.Connection,
     now: datetime,
+    derivation_store: DerivationStore | None = None,
 ) -> ImportReport:
     """Import both halves of an already-verified snapshot for one device,
-    returning a report of what was found and done."""
+    returning a report of what was found and done.
+
+    `derivation_store` is optional only so every existing caller and test
+    that predates `storage.derivations` keeps working unchanged; the real
+    CLI path always supplies it now. When given, and at least one sample
+    was actually read, marks the device's `outages` derivation dirty from
+    the earliest imported sample's timestamp -- never from a later one,
+    so a re-run that reads the same or a narrower range never hides an
+    earlier pending mark.
+    """
     legacy_store = LegacyStore(writer_conn)
     sample_store = SampleStore(writer_conn)
 
@@ -75,6 +89,9 @@ def run_import(
 
     batch = sample_store.add_batch(device_id, 2, valid_rows)
     timestamps = [ts for ts, _ in valid_rows]
+
+    if derivation_store is not None and timestamps:
+        derivation_store.mark_dirty(device_id, "outages", min(timestamps))
 
     return ImportReport(
         samples_read=len(valid_rows) + invalid,

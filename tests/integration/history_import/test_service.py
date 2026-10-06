@@ -12,6 +12,7 @@ from pathlib import Path
 from ecoflow_stats.devices.reading import FIELD_NAMES, Reading
 from ecoflow_stats.history_import.service import run_import
 from ecoflow_stats.storage.database import Database
+from ecoflow_stats.storage.derivations import DerivationStore
 from ecoflow_stats.storage.devices import DeviceStore
 from ecoflow_stats.storage.imports import ImportRunStore
 from ecoflow_stats.storage.samples import SampleStore
@@ -168,5 +169,67 @@ def test_resuming_after_a_simulated_partial_batch_interruption_does_not_double_c
         assert report.samples_skipped_overlap == 2
         (sample_count,) = db.writer.execute("SELECT COUNT(*) FROM samples").fetchone()
         assert sample_count == 5
+    finally:
+        db.close()
+
+
+def test_run_import_marks_outages_dirty_from_the_earliest_imported_sample(
+    tmp_path: Path,
+) -> None:
+    """A regression that forgot this call would mean a freshly imported
+    history never gets recomputed into outage statistics until some
+    unrelated full recompute happens to run -- silently violating
+    "Recomputed Events Are Authoritative Where the App's Own Data
+    Overlaps". Only given when the caller actually has one to pass: a
+    dry-run caller with no real `derivations` table must not need it."""
+    db, device_id, import_id = _env(tmp_path)
+    try:
+        samples_db = tmp_path / "snapshot" / "samples.db"
+        samples_db.parent.mkdir(parents=True)
+        _build_snapshot_samples_db(samples_db, [(1_700_000_120, 90), (1_700_000_000, 91)])
+        outage_log = tmp_path / "snapshot" / "outages.log"
+        outage_log.write_text("")
+        derivation_store = DerivationStore(db.writer)
+
+        run_import(
+            snapshot_samples_db=samples_db,
+            snapshot_outage_log=outage_log,
+            device_id=device_id,
+            source_tz="America/Tegucigalpa",
+            import_id=import_id,
+            writer_conn=db.writer,
+            now=_NOW,
+            derivation_store=derivation_store,
+        )
+
+        derivation = derivation_store.get(device_id, "outages")
+        assert derivation is not None
+        assert derivation.dirty_from_ts == 1_700_000_000  # the earlier of the two rows
+    finally:
+        db.close()
+
+
+def test_run_import_without_a_derivation_store_still_imports(tmp_path: Path) -> None:
+    """`derivation_store` is optional precisely so a caller that has not
+    wired one up (every pre-existing caller and test) keeps working."""
+    db, device_id, import_id = _env(tmp_path)
+    try:
+        samples_db = tmp_path / "snapshot" / "samples.db"
+        samples_db.parent.mkdir(parents=True)
+        _build_snapshot_samples_db(samples_db, [(1_700_000_000, 90)])
+        outage_log = tmp_path / "snapshot" / "outages.log"
+        outage_log.write_text("")
+
+        report = run_import(
+            snapshot_samples_db=samples_db,
+            snapshot_outage_log=outage_log,
+            device_id=device_id,
+            source_tz="America/Tegucigalpa",
+            import_id=import_id,
+            writer_conn=db.writer,
+            now=_NOW,
+        )
+
+        assert report.samples_inserted == 1
     finally:
         db.close()

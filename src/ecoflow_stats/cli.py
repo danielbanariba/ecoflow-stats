@@ -8,10 +8,10 @@ hands it to a server; ``check`` runs the full one-shot device check;
 ``import`` takes a verified, read-only snapshot of the legacy ecoflow-panel
 sources, then imports the outage log and samples into the application
 database (or, with ``--dry-run``, into a throwaway one) and prints a
-report; ``healthcheck`` probes this same process's own ``/healthz``.
-``recompute`` has no implementation yet and raises ``NotImplementedError``
-rather than silently doing nothing, so an operator never mistakes "not
-implemented" for a successful run.
+report; ``recompute`` forces a full outage recompute for every configured
+device against the real application database (the design's "CLI
+recompute (full)" trigger), without starting the collector or the server;
+``healthcheck`` probes this same process's own ``/healthz``.
 """
 
 from __future__ import annotations
@@ -38,9 +38,16 @@ from ecoflow_stats.history_import.panel_samples import SnapshotError, make_snaps
 from ecoflow_stats.history_import.report import ImportReport
 from ecoflow_stats.history_import.service import run_import
 from ecoflow_stats.logs import configure_logging
+from ecoflow_stats.outages.model import DetectorConfig
+from ecoflow_stats.outages.service import derive_outages
 from ecoflow_stats.storage.database import Database
+from ecoflow_stats.storage.derivations import DerivationStore
 from ecoflow_stats.storage.devices import DeviceStore
+from ecoflow_stats.storage.failures import FailureLog
 from ecoflow_stats.storage.imports import ImportRunStore
+from ecoflow_stats.storage.outages import OutageStore
+from ecoflow_stats.storage.runs import RunLog
+from ecoflow_stats.storage.samples import SampleStore
 from ecoflow_stats.web.app import create_app
 
 if TYPE_CHECKING:
@@ -158,12 +165,65 @@ def _import_into(
             import_id=import_id,
             writer_conn=database.writer,
             now=now,
+            derivation_store=DerivationStore(database.writer),
         )
         if record_run:
             ImportRunStore(database.writer).finish(
                 import_id, int(now.timestamp()), report.to_json()
             )
         return report
+    finally:
+        database.close()
+
+
+def _run_recompute_command(settings: Settings, *, now: datetime | None = None) -> int:
+    """Force a full outage recompute for every configured device, against
+    the real application database (design's "CLI recompute (full)"
+    trigger) -- never the collector or the server.
+
+    `now` is injectable for tests only; the production path (`main`)
+    never passes it, so it always uses the real wall clock.
+    """
+    moment = now if now is not None else datetime.now(UTC)
+    database = Database(settings.data_dir / "ecoflow-stats.db")
+    try:
+        now_s = int(moment.timestamp())
+        device_store = DeviceStore(database.writer)
+        sample_store = SampleStore(database.writer)
+        failure_log = FailureLog(database.writer)
+        run_log = RunLog(database.writer)
+        outage_store = OutageStore(database.writer)
+        derivation_store = DerivationStore(database.writer)
+        config = DetectorConfig(
+            threshold_v=settings.outage_threshold_v, gap_threshold_s=settings.gap_threshold
+        )
+
+        for device_config in settings.devices:
+            record = device_store.upsert(
+                sn=device_config.serial,
+                adapter_id=device_config.adapter_id or "generic",
+                created_at=now_s,
+            )
+            database.writer.execute("BEGIN IMMEDIATE")
+            try:
+                derive_outages(
+                    record.id,
+                    sample_store=sample_store,
+                    failure_log=failure_log,
+                    run_log=run_log,
+                    outage_store=outage_store,
+                    derivation_store=derivation_store,
+                    config=config,
+                    now=moment,
+                    full=True,
+                )
+            except Exception:
+                database.writer.rollback()
+                raise
+            database.writer.commit()
+            events = outage_store.events(record.id, 0, now_s)
+            print(f"recomputed …{record.sn[-4:]}: {len(events)} outage event(s)")
+        return 0
     finally:
         database.close()
 
@@ -237,9 +297,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Parse arguments, validate configuration, then dispatch.
 
     Returns the process exit code for the configuration-error path (``2``);
-    ``serve``, ``check``, ``import`` and ``healthcheck`` return their own
-    real exit codes. ``recompute`` raises ``NotImplementedError`` until its
-    own work unit lands.
+    every subcommand returns its own real exit code.
     """
     args = _build_parser().parse_args(argv)
     try:
@@ -257,6 +315,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "import":
         return _run_import_command(settings, args)
+
+    if args.command == "recompute":
+        return _run_recompute_command(settings)
 
     if args.command == "healthcheck":
         return run_healthcheck(settings)

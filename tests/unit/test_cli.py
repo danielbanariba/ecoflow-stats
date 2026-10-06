@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -97,18 +98,59 @@ def test_main_dispatches_healthcheck_to_run_healthcheck(
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("command", ["recompute"])
-def test_not_yet_built_subcommands_raise_until_their_phase_lands(
+def test_main_dispatches_recompute_to_run_recompute_command(
     monkeypatch: pytest.MonkeyPatch,
-    command: str,
 ) -> None:
-    """This command has no real implementation before its own work unit
-    (outages/service.py). It must fail loudly, not silently return success
-    for work that never ran."""
     _set_env(monkeypatch, VALID_ENV)
+    calls = []
+    monkeypatch.setattr(cli, "_run_recompute_command", lambda settings: calls.append(settings) or 0)
 
-    with pytest.raises(NotImplementedError):
-        main([command])
+    exit_code = main(["recompute"])
+
+    assert exit_code == 0
+    assert len(calls) == 1
+
+
+def test_recompute_with_no_samples_runs_cleanly_and_reports_every_device(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A full recompute against a brand-new, empty data directory must
+    not require any samples to already exist -- it is also how the very
+    first recompute after `serve` creates the database would run."""
+    _set_env(
+        monkeypatch,
+        {
+            **VALID_ENV,
+            "ECOFLOW_DEVICES": "TESTDEV0001,TESTDEV0002",
+            "ECOFLOW_STATS_DATA_DIR": str(tmp_path),
+        },
+    )
+    settings = load_settings(os.environ)
+
+    exit_code = cli._run_recompute_command(settings, now=datetime(2026, 10, 6, tzinfo=UTC))
+
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert out.count("recomputed") == 2
+    assert "0 outage event(s)" in out
+
+
+def test_recompute_forces_a_full_recompute_even_when_already_clean(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Running `recompute` twice in a row must recompute both times --
+    the whole point of an operator-invoked recompute is that it is never
+    a silent no-op just because nothing is marked dirty."""
+    _set_env(monkeypatch, {**VALID_ENV, "ECOFLOW_STATS_DATA_DIR": str(tmp_path)})
+    settings = load_settings(os.environ)
+
+    first = cli._run_recompute_command(settings, now=datetime(2026, 10, 6, tzinfo=UTC))
+    second = cli._run_recompute_command(settings, now=datetime(2026, 10, 6, 1, tzinfo=UTC))
+
+    assert (first, second) == (0, 0)
 
 
 def test_check_subparser_accepts_an_explicit_serial() -> None:

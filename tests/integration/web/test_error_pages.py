@@ -96,6 +96,34 @@ def test_a_404_on_a_page_route_renders_the_designed_html_error_page(
         application.database.close()
 
 
+def test_an_unknown_device_query_param_on_a_page_route_renders_the_404_page(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """API-02 (qa-report-data-01.md), the page half: when API-02 was
+    first fixed (batch B), only `/api/v1/*` routes were in scope -- a
+    page route's own `?device=<unknown>` silently fell back to the
+    first configured device instead of telling the visitor their link
+    was wrong. Pass-1: a page route still swallowing an unknown
+    `device` id would show device 1's data under a URL that claims to
+    be about a device that does not exist -- this proves it now
+    renders the same themed 404 `test_a_404_on_a_page_route_renders_
+    the_designed_html_error_page` already proves for an unknown path,
+    reusing `web.routes.errors.render_error_page` rather than a
+    second, divergent not-found page."""
+    application = _build(monkeypatch, tmp_path)
+    try:
+        (configured_device,) = application.device_records
+        unknown_device_id = configured_device.id + 999
+        with TestClient(_app(application)) as client:
+            response = client.get(f"/?device={unknown_device_id}")
+
+        assert response.status_code == 404
+        assert response.headers["content-type"].startswith("text/html")
+        assert "Page not found" in response.text
+    finally:
+        application.database.close()
+
+
 def test_a_404_on_an_api_route_still_returns_the_existing_json_body(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

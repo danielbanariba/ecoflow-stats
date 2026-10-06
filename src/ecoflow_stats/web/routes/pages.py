@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
@@ -109,7 +109,18 @@ def _resolve_lang(request: Request, ctx: PagesContext) -> str:
 
 
 def _resolve_device(request: Request, ctx: PagesContext, requested: int | None) -> int:
+    """API-02 (qa-report-data-01.md), the page half: an explicitly
+    requested, unconfigured device id is a bad link, not a signal to
+    fall back -- that silent fallback (`select_device_id`'s own
+    documented behavior, correct for an absent/invalid remembered
+    cookie) must only apply when the visitor didn't ask for a specific
+    device at all. Raising here, before `select_device_id` runs, lets
+    `web.app`'s existing `StarletteHTTPException` handler render the
+    same themed 404 (UI-13) a bad path already gets, with no change to
+    `select_device_id` or its own tests."""
     device_ids = tuple(record.id for record in ctx.device_records)
+    if requested is not None and requested not in device_ids:
+        raise HTTPException(status_code=404, detail="unknown device")
     return select_device_id(
         device_ids, requested=requested, cookie_value=request.cookies.get(DEVICE_COOKIE)
     )

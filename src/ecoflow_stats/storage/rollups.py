@@ -9,11 +9,19 @@ subset (``soc_min``, ``soc_max``, ``cycles_last``, ``soh_last``,
 ``batt_temp_max``); :meth:`RollupStore.upsert_energy` (visual-QA batch
 fix01, fix 6) writes only the seven energy-field columns
 (``chg_ac_wh``, ``chg_dc_wh``, ``chg_solar_wh``, ``dsg_ac_wh``,
-``dsg_dc_wh``, ``chg_ac_est_wh``, ``energy_flags``). Each method's
+``dsg_dc_wh``, ``chg_ac_est_wh``, ``energy_flags``); :meth:`RollupStore.
+upsert_grid` (task 20.2) writes only the seven grid-field columns
+(``grid_v_min``, ``grid_v_avg``, ``grid_v_max``, ``grid_hz_min``,
+``grid_hz_avg``, ``grid_hz_max``, ``grid_readings``). Each method's
 ``ON CONFLICT`` clause ``UPDATE``s only its own columns, so a write
 from one capability for a given ``(device_id, day)`` row never clobbers
-what another capability already wrote there. The grid columns (Phase
-20) still have no write path.
+what another capability already wrote there.
+
+Reads mirror this same column-scoping: :meth:`RollupStore.get`/
+:meth:`between` return only the battery-field subset (``DailyRollup``);
+:meth:`grid_between` (task 20.2's reader half) returns its own
+capability-scoped ``DailyGridRollup``, rather than one dataclass
+carrying every column a caller may not need.
 """
 
 from __future__ import annotations
@@ -46,6 +54,41 @@ def _row_to_rollup(row: sqlite3.Row) -> DailyRollup:
         cycles_last=row["cycles_last"],
         soh_last=row["soh_last"],
         batt_temp_max=row["batt_temp_max"],
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class DailyGridRollup:
+    """The grid-field subset of one ``daily_rollups`` row (task 20.2).
+    The 6 range fields are ``None`` together whenever the day had no
+    grid-present judged reading at all -- never a fabricated ``0.0``
+    (grid-quality requirement "Daily Voltage and Frequency Ranges",
+    scenario "A day with no grid-present samples reports no range");
+    ``grid_readings`` is ``0`` in that same case (the column's own
+    ``NOT NULL DEFAULT 0``, never ``None``)."""
+
+    device_id: int
+    day: str
+    grid_v_min: float | None
+    grid_v_avg: float | None
+    grid_v_max: float | None
+    grid_hz_min: float | None
+    grid_hz_avg: float | None
+    grid_hz_max: float | None
+    grid_readings: int
+
+
+def _row_to_grid_rollup(row: sqlite3.Row) -> DailyGridRollup:
+    return DailyGridRollup(
+        device_id=row["device_id"],
+        day=row["day"],
+        grid_v_min=row["grid_v_min"],
+        grid_v_avg=row["grid_v_avg"],
+        grid_v_max=row["grid_v_max"],
+        grid_hz_min=row["grid_hz_min"],
+        grid_hz_avg=row["grid_hz_avg"],
+        grid_hz_max=row["grid_hz_max"],
+        grid_readings=row["grid_readings"],
     )
 
 
@@ -142,6 +185,53 @@ class RollupStore:
             ),
         )
 
+    def upsert_grid(
+        self,
+        device_id: int,
+        day: str,
+        *,
+        grid_v_min: float | None,
+        grid_v_avg: float | None,
+        grid_v_max: float | None,
+        grid_hz_min: float | None,
+        grid_hz_avg: float | None,
+        grid_hz_max: float | None,
+        grid_readings: int,
+    ) -> None:
+        """Insert or replace one day's grid fields, touching only those
+        seven columns -- another sibling to `upsert`/`upsert_energy`,
+        the same column-scoped-ON-CONFLICT pattern (task 20.2). Called
+        unconditionally for every day `derive_rollups` re-aggregates
+        (design D4: "each affected day is replaced wholesale"), so a
+        day that had grid-present samples on a prior run but none on
+        this one correctly reverts to NULL ranges / zero readings,
+        rather than keeping a stale range forever."""
+        self._conn.execute(
+            "INSERT INTO daily_rollups"
+            " (device_id, day, grid_v_min, grid_v_avg, grid_v_max,"
+            " grid_hz_min, grid_hz_avg, grid_hz_max, grid_readings)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT (device_id, day) DO UPDATE SET"
+            " grid_v_min = excluded.grid_v_min,"
+            " grid_v_avg = excluded.grid_v_avg,"
+            " grid_v_max = excluded.grid_v_max,"
+            " grid_hz_min = excluded.grid_hz_min,"
+            " grid_hz_avg = excluded.grid_hz_avg,"
+            " grid_hz_max = excluded.grid_hz_max,"
+            " grid_readings = excluded.grid_readings",
+            (
+                device_id,
+                day,
+                grid_v_min,
+                grid_v_avg,
+                grid_v_max,
+                grid_hz_min,
+                grid_hz_avg,
+                grid_hz_max,
+                grid_readings,
+            ),
+        )
+
     def get(self, device_id: int, day: str) -> DailyRollup | None:
         """Return one device's rollup row for ``day``, or ``None`` if it
         has never been computed."""
@@ -162,5 +252,18 @@ class RollupStore:
         ).fetchall()
         return [_row_to_rollup(row) for row in rows]
 
+    def grid_between(self, device_id: int, start_day: str, end_day: str) -> list[DailyGridRollup]:
+        """Return a device's grid-field rollup rows within
+        ``[start_day, end_day]`` (inclusive, ``'YYYY-MM-DD'`` strings),
+        in day order -- the grid-field-scoped sibling of `between`
+        (`web.routes.api`'s `grid/daily` route, task 20.3's API half)."""
+        rows = self._conn.execute(
+            "SELECT device_id, day, grid_v_min, grid_v_avg, grid_v_max,"
+            " grid_hz_min, grid_hz_avg, grid_hz_max, grid_readings"
+            " FROM daily_rollups WHERE device_id = ? AND day BETWEEN ? AND ? ORDER BY day",
+            (device_id, start_day, end_day),
+        ).fetchall()
+        return [_row_to_grid_rollup(row) for row in rows]
 
-__all__ = ["DailyRollup", "RollupStore"]
+
+__all__ = ["DailyGridRollup", "DailyRollup", "RollupStore"]

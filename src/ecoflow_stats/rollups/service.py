@@ -2,15 +2,28 @@
 
 Decides whether a device's `daily_rollups` can resume from the dirty
 day onward or need a full recompute, then re-aggregates each affected
-day's stored samples into both the battery-field columns
-(`cycles_last`, `soh_last`, `soc_min`/`max`, `batt_temp_max`) and, since
-visual-QA batch fix01 (fix 6), the energy-field columns
+day's stored samples into the battery-field columns (`cycles_last`,
+`soh_last`, `soc_min`/`max`, `batt_temp_max`), the energy-field columns
 (`chg_ac_wh`/`chg_dc_wh`/`chg_solar_wh`/`dsg_ac_wh`/`dsg_dc_wh`/
-`chg_ac_est_wh`/`energy_flags`), composing `energy.service.
-daily_energy_for_samples` -- one job run now produces both capabilities'
-columns for the same row, matching `storage.rollups`'s "additively
-extensible" design intent. Grid fields still extend this module's
-per-day aggregation in a future Phase 20.
+`chg_ac_est_wh`/`energy_flags`, visual-QA batch fix01, fix 6; composing
+`energy.service.daily_energy_for_samples`), and, since task 20.2, the
+grid-field columns (`grid_v_min`/`avg`/`max`, `grid_hz_min`/`avg`/`max`,
+`grid_readings`; composing `grid.quality.grid_quality_range` directly
+-- unlike energy, there is no `grid.service` composition seam, matching
+this module's own existing precedent for the battery fields, which are
+likewise computed inline below rather than through a `battery.service`
+wrapper) -- one job run now produces every capability's columns for
+the same row, matching `storage.rollups`'s "additively extensible"
+design intent.
+
+Grid presence (task 20.2) reuses `outages.model.judge()` through
+`grid.quality.grid_quality_range`'s own default `DetectorConfig()`
+rather than the application's actually-configured threshold/gap
+settings: threading `Settings.outage_threshold_v`/`gap_threshold` into
+this job would need `jobs.py`/`web.app._start_rollups_job` changes
+outside this batch's declared edit surface, the same documented,
+disclosed non-threading precedent batch fix01 already established for
+`daily_energy_for_samples`'s `tariff=None`.
 
 Mirrors `outages.service.derive_outages`'s shape closely: the caller
 owns the surrounding `BEGIN IMMEDIATE` transaction and commits it once,
@@ -35,6 +48,7 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 from ecoflow_stats.energy.service import daily_energy_for_samples
+from ecoflow_stats.grid.quality import grid_quality_range
 from ecoflow_stats.timeutil import day_bounds, local_day
 
 if TYPE_CHECKING:
@@ -131,7 +145,8 @@ def derive_rollups(
     full: bool = False,
 ) -> bool:
     """Recompute device ``device_id``'s daily rollups: the battery-field
-    columns, and (visual-QA batch fix01, fix 6) the energy-field columns.
+    columns, the energy-field columns (visual-QA batch fix01, fix 6),
+    and the grid-field columns (task 20.2).
 
     Days are bucketed by ``timeutil.local_day`` under ``tz`` (energy
     requirement "Day Boundaries Use a Configurable Local Timezone")
@@ -229,6 +244,31 @@ def derive_rollups(
                 dsg_dc_wh=energy.dsg_dc_wh,
                 chg_ac_est_wh=energy.chg_ac_est_wh,
                 energy_flags=_encode_energy_flags(energy.flags),
+            )
+        grid = grid_quality_range(day_samples)
+        if grid == "unavailable":
+            rollup_store.upsert_grid(
+                device_id,
+                day,
+                grid_v_min=None,
+                grid_v_avg=None,
+                grid_v_max=None,
+                grid_hz_min=None,
+                grid_hz_avg=None,
+                grid_hz_max=None,
+                grid_readings=0,
+            )
+        else:
+            rollup_store.upsert_grid(
+                device_id,
+                day,
+                grid_v_min=grid.grid_v_min,
+                grid_v_avg=grid.grid_v_avg,
+                grid_v_max=grid.grid_v_max,
+                grid_hz_min=grid.grid_hz_min,
+                grid_hz_avg=grid.grid_hz_avg,
+                grid_hz_max=grid.grid_hz_max,
+                grid_readings=grid.readings,
             )
 
     derivation_store.mark_computed(

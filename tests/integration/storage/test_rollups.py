@@ -22,7 +22,7 @@ from ecoflow_stats.rollups.service import derive_rollups
 from ecoflow_stats.storage.database import Database
 from ecoflow_stats.storage.derivations import DerivationStore
 from ecoflow_stats.storage.devices import DeviceStore
-from ecoflow_stats.storage.rollups import DailyRollup, RollupStore
+from ecoflow_stats.storage.rollups import DailyGridRollup, DailyRollup, RollupStore
 from ecoflow_stats.storage.samples import SampleStore
 
 _NOW = datetime(2026, 10, 6, tzinfo=UTC)
@@ -64,6 +64,10 @@ class _Env:
 
     def rollup(self, device_id: int, day: str) -> DailyRollup | None:
         return RollupStore(self.writer).get(device_id, day)
+
+    def grid_rollup(self, device_id: int, day: str) -> DailyGridRollup | None:
+        rows = RollupStore(self.writer).grid_between(device_id, day, day)
+        return rows[0] if rows else None
 
     def close(self) -> None:
         self.db.close()
@@ -235,6 +239,92 @@ def test_upsert_energy_never_touches_another_capabilitys_already_written_columns
     assert tuple(row) == (120.5, 10.0, 300.0, 50.0, 5.0, 20.0, 1)
 
 
+def test_upsert_grid_never_touches_another_capabilitys_already_written_columns(env: _Env) -> None:
+    """Mirrors `upsert_energy`'s own column-scoping guarantee (fix01) for
+    the grid side (task 20.2): a later grid-field write to the same
+    `(device_id, day)` row must survive an earlier battery-field
+    upsert, and vice versa -- a defect that updated every column
+    instead of only the 7 grid ones would silently erase the battery
+    fields."""
+    device_id = env.device("BA31ZEB1SF7F0001")
+    RollupStore(env.writer).upsert(
+        device_id,
+        "2026-10-01",
+        soc_min=40,
+        soc_max=90,
+        cycles_last=10,
+        soh_last=98.0,
+        batt_temp_max=25.0,
+    )
+    env.writer.commit()
+
+    RollupStore(env.writer).upsert_grid(
+        device_id,
+        "2026-10-01",
+        grid_v_min=118.0,
+        grid_v_avg=120.0,
+        grid_v_max=122.0,
+        grid_hz_min=59.8,
+        grid_hz_avg=60.0,
+        grid_hz_max=60.2,
+        grid_readings=3,
+    )
+    env.writer.commit()
+
+    (soc_min,) = env.writer.execute(
+        "SELECT soc_min FROM daily_rollups WHERE device_id = ? AND day = ?",
+        (device_id, "2026-10-01"),
+    ).fetchone()
+    assert soc_min == 40
+    row = env.writer.execute(
+        "SELECT grid_v_min, grid_v_avg, grid_v_max, grid_hz_min, grid_hz_avg, grid_hz_max,"
+        " grid_readings FROM daily_rollups WHERE device_id = ? AND day = ?",
+        (device_id, "2026-10-01"),
+    ).fetchone()
+    assert tuple(row) == (118.0, 120.0, 122.0, 59.8, 60.0, 60.2, 3)
+
+
+def test_upsert_grid_on_the_same_key_replaces_rather_than_duplicates(env: _Env) -> None:
+    device_id = env.device("BA31ZEB1SF7F0001")
+    store = RollupStore(env.writer)
+    store.upsert_grid(
+        device_id,
+        "2026-10-01",
+        grid_v_min=118.0,
+        grid_v_avg=120.0,
+        grid_v_max=122.0,
+        grid_hz_min=59.8,
+        grid_hz_avg=60.0,
+        grid_hz_max=60.2,
+        grid_readings=3,
+    )
+    env.writer.commit()
+
+    store.upsert_grid(
+        device_id,
+        "2026-10-01",
+        grid_v_min=None,
+        grid_v_avg=None,
+        grid_v_max=None,
+        grid_hz_min=None,
+        grid_hz_avg=None,
+        grid_hz_max=None,
+        grid_readings=0,
+    )
+    env.writer.commit()
+
+    (grid_v_min, grid_readings) = env.writer.execute(
+        "SELECT grid_v_min, grid_readings FROM daily_rollups WHERE device_id = ? AND day = ?",
+        (device_id, "2026-10-01"),
+    ).fetchone()
+    assert (grid_v_min, grid_readings) == (None, 0)
+    (count,) = env.writer.execute(
+        "SELECT COUNT(*) FROM daily_rollups WHERE device_id = ? AND day = ?",
+        (device_id, "2026-10-01"),
+    ).fetchone()
+    assert count == 1
+
+
 def test_upsert_energy_on_the_same_key_replaces_rather_than_duplicates(env: _Env) -> None:
     device_id = env.device("BA31ZEB1SF7F0001")
     store = RollupStore(env.writer)
@@ -326,6 +416,49 @@ def test_a_counter_reset_is_flagged_in_the_persisted_energy_flags_bitmask(env: _
         (device_id, "1970-01-01"),
     ).fetchone()
     assert energy_flags == 1
+
+
+# --- derive_rollups: grid-field aggregation (task 20.2) --------------------
+
+
+def test_a_full_recompute_also_persists_grid_fields_for_the_same_day(env: _Env) -> None:
+    """Task 20.2's core claim: the same `derive_rollups` run that fills
+    battery and energy columns also fills the grid columns for that
+    day, from the PRESENT-judged samples only. Pass-1: before this
+    change, `storage.rollups.RollupStore` had no grid-column write
+    path at all, so `grid_v_min`/etc. would stay their SQL default of
+    NULL forever even once `grid.quality.grid_quality_range` existed."""
+    device_id = env.device("BA31ZEB1SF7F0001")
+    env.insert(
+        device_id,
+        [
+            (0, _reading(grid_v=118.0, grid_hz=59.8)),
+            (60, _reading(grid_v=122.0, grid_hz=60.2)),
+        ],
+    )
+
+    assert env.derive(device_id) is True
+
+    row = env.grid_rollup(device_id, "1970-01-01")
+    assert row is not None
+    assert (row.grid_v_min, row.grid_v_avg, row.grid_v_max) == (118.0, 120.0, 122.0)
+    assert row.grid_readings == 2
+
+
+def test_a_day_with_no_grid_present_samples_persists_null_ranges_not_zero(env: _Env) -> None:
+    """Scenario "A day with no grid-present samples reports no range"
+    (grid-quality spec), proven at the persistence layer: a day whose
+    only samples judge grid absent must store NULL grid columns, never
+    a fabricated `0.0` that a chart could mistake for "zero volts"."""
+    device_id = env.device("BA31ZEB1SF7F0001")
+    env.insert(device_id, [(0, _reading(grid_v=10.0, grid_hz=59.9))])  # below the 50V floor
+
+    assert env.derive(device_id) is True
+
+    row = env.grid_rollup(device_id, "1970-01-01")
+    assert row is not None
+    assert row.grid_v_min is None
+    assert row.grid_readings == 0
 
 
 # --- derive_rollups: battery-field aggregation ------------------------------

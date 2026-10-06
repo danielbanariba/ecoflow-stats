@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
@@ -50,6 +50,7 @@ CSRF_FORM_FIELD = "csrf_token"
 _HEALTH_CHECK_PATH = "/healthz"
 _LOGIN_PATH = "/login"
 _STATIC_PREFIX = "/static/"
+_API_PREFIX = "/api/"
 _CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self'; "
     "img-src 'self' data:; connect-src 'self'; font-src 'self'; "
@@ -260,6 +261,13 @@ class AccessControlMiddleware(BaseHTTPMiddleware):
 
         if has_valid_session(request, security):
             return await call_next(request)
+
+        if request.url.path.startswith(_API_PREFIX):
+            # API-03: a JSON API client gets a `401` it can actually act
+            # on, never the browser-oriented login redirect below -- a
+            # page route (anything not under `/api/`) keeps that
+            # redirect unchanged.
+            return JSONResponse({"detail": "authentication required"}, status_code=401)
 
         return RedirectResponse(url=f"{_LOGIN_PATH}?next={request.url.path}", status_code=303)
 

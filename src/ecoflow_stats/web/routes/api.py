@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from ecoflow_stats.battery.service import observed_autonomy
@@ -59,6 +59,19 @@ _DEFAULT_RANGE_S = 7 * 24 * 60 * 60
 """The range query defaults to the trailing 7 days when `from`/`to` are
 omitted -- a sensible default for a dashboard call, not a domain rule."""
 _PRESENT, _ABSENT, _UNKNOWN = "present", "absent", "unknown"
+
+_MIN_TS = int(datetime.min.replace(tzinfo=UTC).timestamp())
+_MAX_TS = int(datetime.max.replace(tzinfo=UTC).timestamp())
+"""The representable-timestamp bound every `from`/`to` query param is
+validated against (API-01). Bounded to `datetime`'s own min/max rather
+than SQLite's wider signed-int64 column range -- `datetime`'s range is
+the tighter of the two real crash sites this bound must cover:
+`SampleStore.between()`'s raw SQLite bind (int64) and
+`timeutil.local_day()`'s `datetime.fromtimestamp()` (platform `time_t`,
+narrower still). Computed from a timezone-aware `datetime`, whose
+`.timestamp()` is pure timedelta arithmetic against the epoch -- never
+a platform `mktime`/`gmtime` call -- so computing the bound itself can
+never raise the same `OverflowError` it exists to prevent."""
 
 _GRID_BUCKET_TIERS: tuple[tuple[int | None, int], ...] = ((7, 300), (90, 3_600), (None, 86_400))
 """`grid/series`'s chart-resolution tiers (task 20.3): 5 min for a
@@ -113,8 +126,22 @@ def _resolve_device_id(ctx: ApiContext, requested: int | None) -> int:
 
 
 def _resolve_range(ctx: ApiContext, start: int | None, end: int | None) -> tuple[int, int]:
+    """Validate and default `from`/`to` (API-01): the one shared place
+    every `/api/v1/*` route taking a range calls, so an out-of-range or
+    inverted pair is rejected with a clean `422` before any downstream
+    call can raise the unhandled `OverflowError` the QA report caught at
+    two different crash sites (`SampleStore.between()`,
+    `timeutil.local_day()`)."""
+    for name, value in (("from", start), ("to", end)):
+        if value is not None and not (_MIN_TS <= value <= _MAX_TS):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{name!r} is out of the representable timestamp range",
+            )
     range_end = end if end is not None else int(ctx.now().timestamp())
     range_start = start if start is not None else range_end - _DEFAULT_RANGE_S
+    if range_start > range_end:
+        raise HTTPException(status_code=422, detail="'from' must not be after 'to'")
     return range_start, range_end
 
 

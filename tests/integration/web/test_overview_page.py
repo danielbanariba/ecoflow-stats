@@ -230,14 +230,17 @@ def test_the_page_head_eyebrow_shows_live_status_not_the_heading_text(
         application.database.close()
 
 
-def test_primary_navigation_links_to_outages_and_battery_but_not_unbuilt_pages(
+def test_primary_navigation_links_every_shipped_page(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Visual-QA batch fix01, fix 3: `base.html`'s `<nav>` only linked
     to Overview, leaving the already-shipped Outages and Battery pages
-    undiscoverable without typing a URL by hand. Energy and Grid have
-    no routes yet (slices 29/30), so a defect that linked them too
-    would send a visitor to a 404."""
+    undiscoverable without typing a URL by hand. Energy and Grid (SDD
+    slices 29/30) now have real routes too -- this test used to assert
+    the opposite (that they must NOT be linked, back when they would
+    have 404'd); Pass-1 now: catches either page shipping a route
+    without a nav entry, which would leave it just as undiscoverable as
+    the original defect."""
     application = _build(monkeypatch, tmp_path, devices="TESTDEV0001")
     try:
         app = create_app(
@@ -253,8 +256,8 @@ def test_primary_navigation_links_to_outages_and_battery_but_not_unbuilt_pages(
         html = response.text
         assert '<a href="/outages">' in html
         assert '<a href="/battery">' in html
-        assert '<a href="/energy">' not in html
-        assert '<a href="/grid">' not in html
+        assert '<a href="/energy">' in html
+        assert '<a href="/grid">' in html
     finally:
         application.database.close()
 

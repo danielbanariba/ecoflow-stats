@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from zoneinfo import ZoneInfo
 
 from ecoflow_stats.battery.service import observed_autonomy
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from ecoflow_stats.outages.model import Event, Gap
     from ecoflow_stats.outages.resolve import EffectiveOutage
     from ecoflow_stats.storage.devices import DeviceRecord
+    from ecoflow_stats.storage.rollups import DailyGridRollup
 
 
 @dataclass(frozen=True, slots=True)
@@ -625,6 +626,236 @@ def build_battery_view_model(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class EnergyPeriodRow:
+    """One row of the energy page's periods table (energy requirements
+    "Daily Energy by Source and Direction" / "Energy Cost from a
+    Configurable Flat Tariff"; task 19.1's page half) -- the exact same
+    period dict `web.routes.api.build_energy_periods` already computes,
+    reshaped so the template addresses it by attribute instead of by
+    dict key. Never a second copy of that function's cost/flag
+    computation, only a reshape of its already-computed output."""
+
+    period: str
+    """`"YYYY-MM-DD"` at daily granularity, `"YYYY-MM"` at monthly."""
+    chg_ac_wh: float
+    chg_dc_wh: float
+    chg_solar_wh: float
+    dsg_ac_wh: float
+    dsg_dc_wh: float
+    chg_ac_est_wh: float
+    cost: float | Literal["unavailable"]
+    """`"unavailable"` only when no tariff is configured -- never a
+    fabricated `0` (energy requirement "Energy Cost from a
+    Configurable Flat Tariff")."""
+    currency: str
+    flags: tuple[str, ...]
+    """Decoded flag names (`"counter_reset"`, `"implausible_jump"`,
+    `"gap_prorated"`) -- empty when the period is a clean estimate."""
+
+
+@dataclass(frozen=True, slots=True)
+class EnergyViewModel:
+    """Everything `energy.html` renders."""
+
+    devices: tuple[DeviceOption, ...]
+    selected_device_id: int
+    range_start: int
+    range_end: int
+    granularity: str
+    """`"daily"` or `"monthly"` -- the same `select_bucket` decision
+    `energy_daily_route` applies to its chart's own data source, so the
+    page's table and its chart always agree."""
+    periods: tuple[EnergyPeriodRow, ...]
+    total_in_wh: float
+    total_out_wh: float
+    total_cost: float | Literal["unavailable"]
+    """`"unavailable"` whenever `tariff` was `None` -- never a sum over
+    each period's own `"unavailable"` sentinel mistaken for `0`."""
+    currency: str
+    best_day: EnergyPeriodRow | None
+    """The period with the lowest cost -- `None` when no tariff is
+    configured or there are no periods at all, never ranked by a
+    substitute metric (apply-progress-pages design decision)."""
+    worst_day: EnergyPeriodRow | None
+    """The period with the highest cost, same `None` conditions as
+    `best_day`."""
+    series_src: str
+
+
+def build_energy_period_row(period: dict[str, object]) -> EnergyPeriodRow:
+    """Adapts one of `web.routes.api.build_energy_periods`'s period
+    dicts into a dataclass."""
+    return EnergyPeriodRow(
+        period=period["period"],  # type: ignore[arg-type]
+        chg_ac_wh=period["chg_ac_wh"],  # type: ignore[arg-type]
+        chg_dc_wh=period["chg_dc_wh"],  # type: ignore[arg-type]
+        chg_solar_wh=period["chg_solar_wh"],  # type: ignore[arg-type]
+        dsg_ac_wh=period["dsg_ac_wh"],  # type: ignore[arg-type]
+        dsg_dc_wh=period["dsg_dc_wh"],  # type: ignore[arg-type]
+        chg_ac_est_wh=period["chg_ac_est_wh"],  # type: ignore[arg-type]
+        cost=period["cost"],  # type: ignore[arg-type]
+        currency=period["currency"],  # type: ignore[arg-type]
+        flags=tuple(period["flags"]),  # type: ignore[arg-type]
+    )
+
+
+def build_energy_view_model(
+    *,
+    device_records: tuple[DeviceRecord, ...],
+    selected_device_id: int,
+    range_start: int,
+    range_end: int,
+    granularity: str,
+    periods: Sequence[dict[str, object]],
+    tariff: float | None,
+    currency: str,
+    series_src: str,
+) -> EnergyViewModel:
+    """Build the energy page's view model from
+    `web.routes.api.build_energy_periods`'s already-computed period
+    dicts -- `tariff` (not an inference from the rows) decides
+    `total_cost`/`best_day`/`worst_day`'s availability, since every
+    period shares the one app-wide tariff and can never disagree with
+    each other about whether a cost was computed at all."""
+    rows = tuple(build_energy_period_row(period) for period in periods)
+    total_in_wh = sum(row.chg_ac_wh + row.chg_dc_wh + row.chg_solar_wh for row in rows)
+    total_out_wh = sum(row.dsg_ac_wh + row.dsg_dc_wh for row in rows)
+    best_day: EnergyPeriodRow | None = None
+    worst_day: EnergyPeriodRow | None = None
+    total_cost: float | Literal["unavailable"]
+    if tariff is None:
+        total_cost = "unavailable"
+    else:
+        total_cost = sum(row.cost for row in rows)  # type: ignore[misc]
+        if rows:
+            best_day = min(rows, key=lambda row: row.cost)  # type: ignore[arg-type,return-value]
+            worst_day = max(rows, key=lambda row: row.cost)  # type: ignore[arg-type,return-value]
+    return EnergyViewModel(
+        devices=build_device_options(device_records, selected_device_id=selected_device_id),
+        selected_device_id=selected_device_id,
+        range_start=range_start,
+        range_end=range_end,
+        granularity=granularity,
+        periods=rows,
+        total_in_wh=total_in_wh,
+        total_out_wh=total_out_wh,
+        total_cost=total_cost,
+        currency=currency,
+        best_day=best_day,
+        worst_day=worst_day,
+        series_src=series_src,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class GridDailyRow:
+    """One day's row in the grid page's daily ranges table
+    (grid-quality requirement "Daily Voltage and Frequency Ranges") --
+    the same `storage.rollups.DailyGridRollup` shape, reshaped so the
+    template only ever addresses view-model attributes, never a
+    storage dataclass directly."""
+
+    day: str
+    grid_v_min: float | None
+    grid_v_avg: float | None
+    grid_v_max: float | None
+    grid_hz_min: float | None
+    grid_hz_avg: float | None
+    grid_hz_max: float | None
+    readings: int
+    """`0` on a day with no grid-present judged reading at all -- the
+    template shows that day as unavailable, never a fabricated 0V/0Hz
+    range."""
+
+
+@dataclass(frozen=True, slots=True)
+class GridViewModel:
+    """Everything `grid.html` renders."""
+
+    devices: tuple[DeviceOption, ...]
+    selected_device_id: int
+    range_start: int
+    range_end: int
+    daily_rows: tuple[GridDailyRow, ...]
+    threshold_v: float
+    """The configured outage-detector voltage floor
+    (`DetectorConfig.threshold_v`) the page's plain-language
+    explanation refers to -- grid power reads as absent at or below
+    this voltage."""
+    typical_v: float | None
+    """Average of every present day's own `grid_v_avg` -- `None` only
+    when no day in the range had any grid-present reading at all."""
+    lowest_v: float | None
+    highest_v: float | None
+    lowest_hz: float | None
+    """`None` when no present day also reported a frequency range --
+    `grid.quality.grid_quality_range`'s own documented asymmetry: a
+    present reading can still lack frequency, so this is computed over
+    a narrower set of days than `lowest_v`/`highest_v`, never the same
+    present-day filter reused for both."""
+    highest_hz: float | None
+    days_with_data: int
+    days_analyzed: int
+    """The count of rollup rows read for this range -- not an actual
+    calendar-day span -- labelled plainly on the page as "days
+    analyzed" rather than claiming calendar-day coverage this never
+    computed."""
+    series_src: str
+
+
+def build_grid_view_model(
+    *,
+    device_records: tuple[DeviceRecord, ...],
+    selected_device_id: int,
+    range_start: int,
+    range_end: int,
+    rows: Sequence[DailyGridRollup],
+    threshold_v: float,
+    series_src: str,
+) -> GridViewModel:
+    daily_rows = tuple(
+        GridDailyRow(
+            day=row.day,
+            grid_v_min=row.grid_v_min,
+            grid_v_avg=row.grid_v_avg,
+            grid_v_max=row.grid_v_max,
+            grid_hz_min=row.grid_hz_min,
+            grid_hz_avg=row.grid_hz_avg,
+            grid_hz_max=row.grid_hz_max,
+            readings=row.grid_readings,
+        )
+        for row in rows
+    )
+    present_rows = tuple(row for row in daily_rows if row.grid_v_avg is not None)
+    freq_rows = tuple(row for row in present_rows if row.grid_hz_min is not None)
+    typical_v = (
+        sum(row.grid_v_avg for row in present_rows) / len(present_rows)  # type: ignore[arg-type]
+        if present_rows
+        else None
+    )
+    lowest_v = min((row.grid_v_min for row in present_rows), default=None)  # type: ignore[type-var]
+    highest_v = max((row.grid_v_max for row in present_rows), default=None)  # type: ignore[type-var]
+    lowest_hz = min((row.grid_hz_min for row in freq_rows), default=None)  # type: ignore[type-var]
+    highest_hz = max((row.grid_hz_max for row in freq_rows), default=None)  # type: ignore[type-var]
+    return GridViewModel(
+        devices=build_device_options(device_records, selected_device_id=selected_device_id),
+        selected_device_id=selected_device_id,
+        range_start=range_start,
+        range_end=range_end,
+        daily_rows=daily_rows,
+        threshold_v=threshold_v,
+        typical_v=typical_v,
+        lowest_v=lowest_v,
+        highest_v=highest_v,
+        lowest_hz=lowest_hz,
+        highest_hz=highest_hz,
+        days_with_data=len(present_rows),
+        days_analyzed=len(daily_rows),
+        series_src=series_src,
+    )
+
+
 __all__ = [
     "BatteryAutonomyRow",
     "BatteryChargePoint",
@@ -632,6 +863,10 @@ __all__ = [
     "BatteryTrendRow",
     "BatteryViewModel",
     "DeviceOption",
+    "EnergyPeriodRow",
+    "EnergyViewModel",
+    "GridDailyRow",
+    "GridViewModel",
     "HeatmapViewModel",
     "MainsStripSegment",
     "OutageEventRow",
@@ -642,6 +877,9 @@ __all__ = [
     "build_battery_dod_row",
     "build_battery_view_model",
     "build_device_options",
+    "build_energy_period_row",
+    "build_energy_view_model",
+    "build_grid_view_model",
     "build_mains_strip_segments",
     "build_outage_event_rows",
     "build_outages_summary",

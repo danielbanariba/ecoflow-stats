@@ -83,11 +83,16 @@ _GRID_BUCKET_TIERS: tuple[tuple[int | None, int], ...] = ((7, 300), (90, 3_600),
 """`grid/series`'s chart-resolution tiers (task 20.3): 5 min for a
 range of 7 days or less, 1 h for up to 90 days, 1 day beyond that."""
 
-_ENERGY_GRANULARITY_TIERS: tuple[tuple[int | None, str], ...] = ((90, "daily"), (None, "monthly"))
+ENERGY_GRANULARITY_TIERS: tuple[tuple[int | None, str], ...] = ((90, "daily"), (None, "monthly"))
 """`energy/daily`'s aggregation-granularity tiers (task 19.1): daily
 rows for a range of 90 days or less, monthly aggregates beyond that --
-the same `_select_bucket` decision `grid/series` already applies at
-its own thresholds and labels (task 20.5's dedup concern)."""
+the same `select_bucket` decision `grid/series` already applies at
+its own thresholds and labels (task 20.5's dedup concern). Public (no
+leading underscore) because the energy page route (task 19.1's page
+half) imports this -- and `select_bucket`/`build_energy_periods` below
+-- to pick the identical granularity and build the identical periods
+the chart's own `/api/v1/energy/daily` data source would, never a
+second copy of that computation."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,7 +166,7 @@ def _resolve_range(ctx: ApiContext, start: int | None, end: int | None) -> tuple
     return range_start, range_end
 
 
-def _select_bucket[BucketT](
+def select_bucket[BucketT](
     range_start: int, range_end: int, tiers: Sequence[tuple[int | None, BucketT]]
 ) -> BucketT:
     """Pick the coarsest tier whose day-span threshold still covers
@@ -171,7 +176,11 @@ def _select_bucket[BucketT](
     labels (task 20.5's dedup concern: a single shared decision, not an
     independently maintained copy per route). ``tiers`` is ordered
     ``(max_days, value)``; ``max_days=None`` is the open-ended "beyond
-    every prior threshold" tier and must be last."""
+    every prior threshold" tier and must be last.
+
+    Public (no leading underscore): the energy page route (task 19.1's
+    page half) also calls this, with `ENERGY_GRANULARITY_TIERS`, to
+    pick the exact same granularity its chart's own data source would."""
     span_days = (range_end - range_start) / 86_400
     for max_days, value in tiers:
         if max_days is None or span_days <= max_days:
@@ -601,7 +610,7 @@ def grid_series_route(
     ctx: ApiContext = request.app.state.api
     device_id = _resolve_device_id(ctx, device)
     range_start, range_end = _resolve_range(ctx, start, end)
-    bucket_width_s = _select_bucket(range_start, range_end, _GRID_BUCKET_TIERS)
+    bucket_width_s = select_bucket(range_start, range_end, _GRID_BUCKET_TIERS)
     buckets: dict[int, list[tuple[int, Reading]]] = {}
     for row in ctx.sample_store.between(device_id, range_start, range_end):
         bucket_start = range_start + ((row.ts - range_start) // bucket_width_s) * bucket_width_s
@@ -697,7 +706,7 @@ def _energy_period(
     }
 
 
-def _build_energy_periods(
+def build_energy_periods(
     rows: Sequence[DailyEnergyRollup], granularity: str, *, tariff: float | None, currency: str
 ) -> list[dict[str, object]]:
     """Daily or monthly energy periods from a device's persisted energy
@@ -777,11 +786,11 @@ def energy_daily_route(
     ctx: ApiContext = request.app.state.api
     device_id = _resolve_device_id(ctx, device)
     range_start, range_end = _resolve_range(ctx, start, end)
-    granularity = _select_bucket(range_start, range_end, _ENERGY_GRANULARITY_TIERS)
+    granularity = select_bucket(range_start, range_end, ENERGY_GRANULARITY_TIERS)
     rows = _rollup_store(request).energy_between(
         device_id, local_day(range_start, ctx.tz), local_day(range_end, ctx.tz)
     )
-    periods = _build_energy_periods(rows, granularity, tariff=ctx.tariff, currency=ctx.currency)
+    periods = build_energy_periods(rows, granularity, tariff=ctx.tariff, currency=ctx.currency)
     total_chg_ac_wh = sum(period["chg_ac_wh"] for period in periods)  # type: ignore[misc]
     body = {
         "schema": _ENERGY_DAILY_SCHEMA,
@@ -799,10 +808,12 @@ def energy_daily_route(
 
 
 __all__ = [
+    "ENERGY_GRANULARITY_TIERS",
     "ApiContext",
     "battery_outages_route",
     "battery_series_route",
     "battery_trends_route",
+    "build_energy_periods",
     "energy_daily_route",
     "gaps_route",
     "grid_daily_route",
@@ -811,5 +822,6 @@ __all__ = [
     "outages_heatmap_route",
     "outages_route",
     "router",
+    "select_bucket",
     "status_route",
 ]

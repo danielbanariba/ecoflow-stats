@@ -88,7 +88,13 @@ def test_the_nav_links_every_page_and_marks_only_the_current_one_active(
             overview_html = client.get("/").text
             outages_html = client.get("/outages").text
 
-        for href in ('href="/"', 'href="/outages"', 'href="/battery"'):
+        for href in (
+            'href="/"',
+            'href="/outages"',
+            'href="/battery"',
+            'href="/energy"',
+            'href="/grid"',
+        ):
             assert href in overview_html
             assert href in outages_html
 

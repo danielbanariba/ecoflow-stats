@@ -23,7 +23,7 @@ from ecoflow_stats.outages.resolve import resolve, unresolved_gaps, unresolved_l
 from ecoflow_stats.storage.legacy import LegacyStore
 from ecoflow_stats.storage.rollups import RollupStore
 from ecoflow_stats.storage.state import set_session_generation
-from ecoflow_stats.timeutil import relative_time_unit
+from ecoflow_stats.timeutil import local_day, relative_time_unit
 from ecoflow_stats.web.deps import (
     DEVICE_COOKIE,
     LANG_COOKIE,
@@ -32,6 +32,11 @@ from ecoflow_stats.web.deps import (
     select_device_id,
 )
 from ecoflow_stats.web.i18n import SUPPORTED_LANGS, load_catalogs, translator
+from ecoflow_stats.web.routes.api import (
+    ENERGY_GRANULARITY_TIERS,
+    build_energy_periods,
+    select_bucket,
+)
 from ecoflow_stats.web.security import (
     SecurityContext,
     clear_session_cookie,
@@ -48,6 +53,8 @@ from ecoflow_stats.web.security import (
 from ecoflow_stats.web.views import (
     OverviewViewModel,
     build_battery_view_model,
+    build_energy_view_model,
+    build_grid_view_model,
     build_outages_summary,
     build_outages_view_model,
     build_overview_view_model,
@@ -81,6 +88,12 @@ _BATTERY_DEFAULT_RANGE_S = 7 * 24 * 60 * 60
 """Same trailing-7-days default as `_OUTAGES_DEFAULT_RANGE_S`, kept as
 its own name rather than reused so the battery page's range can change
 independently later without an unrelated rename."""
+_ENERGY_DEFAULT_RANGE_S = 7 * 24 * 60 * 60
+"""Same trailing-7-days default as the other pages', kept as its own
+name so the energy page's range can change independently later."""
+_GRID_DEFAULT_RANGE_S = 7 * 24 * 60 * 60
+"""Same trailing-7-days default as the other pages', kept as its own
+name so the grid page's range can change independently later."""
 _OVERVIEW_OUTAGES_WINDOW_S = 30 * 24 * 60 * 60
 """Fixed 30-day lookback for the overview's outage tiles (UI-04/UI-05,
 qa-report-ui-01.md) -- unlike `outages_page`, the overview has no
@@ -411,6 +424,133 @@ def battery_page(
             "view": view_model,
             "tz": request.app.state.api.tz,
             "active_nav": "battery",
+            "csrf_token": csrf_token(security.app_secret, csrf_cookie),
+            "show_logout": _show_logout(request, security),
+        },
+    )
+    response.set_cookie(DEVICE_COOKIE, str(selected_id), max_age=_COOKIE_MAX_AGE_S, samesite="lax")
+    if csrf_cookie_is_new:
+        set_csrf_cookie(response, csrf_cookie, secure=request.url.scheme == "https")
+    return response
+
+
+@router.get("/energy", response_class=HTMLResponse)
+def energy_page(
+    request: Request,
+    device: int | None = None,
+    start: int | None = Query(None, alias="from"),
+    end: int | None = Query(None, alias="to"),
+) -> HTMLResponse:
+    """energy page (SDD slice 29/task 19.1's page half): daily (or
+    monthly beyond 90 days) energy in/out by source, the configured
+    tariff's cost -- or an honest "set a tariff" note with none
+    configured -- summary cards, and each period's estimate flags.
+
+    Reuses `web.routes.api`'s own `select_bucket`/
+    `ENERGY_GRANULARITY_TIERS`/`build_energy_periods` (promoted to
+    public this slice) so the page's table always agrees with its
+    chart's own `/api/v1/energy/daily` data source -- never a second
+    copy of that granularity/cost computation."""
+    ctx: PagesContext = request.app.state.pages
+    api_ctx: ApiContext = request.app.state.api
+    security: SecurityContext = request.app.state.security
+    lang = _resolve_lang(request, ctx)
+    selected_id = _resolve_device(request, ctx, device)
+    csrf_cookie, csrf_cookie_is_new = csrf_cookie_value(request)
+
+    range_end = end if end is not None else int(ctx.now().timestamp())
+    range_start = start if start is not None else range_end - _ENERGY_DEFAULT_RANGE_S
+
+    granularity = select_bucket(range_start, range_end, ENERGY_GRANULARITY_TIERS)
+    rows = _rollup_store(request).energy_between(
+        selected_id, local_day(range_start, api_ctx.tz), local_day(range_end, api_ctx.tz)
+    )
+    periods = build_energy_periods(
+        rows, granularity, tariff=api_ctx.tariff, currency=api_ctx.currency
+    )
+
+    view_model = build_energy_view_model(
+        device_records=ctx.device_records,
+        selected_device_id=selected_id,
+        range_start=range_start,
+        range_end=range_end,
+        granularity=granularity,
+        periods=periods,
+        tariff=api_ctx.tariff,
+        currency=api_ctx.currency,
+        series_src=f"/api/v1/energy/daily?device={selected_id}&from={range_start}&to={range_end}",
+    )
+    response = TEMPLATES.TemplateResponse(
+        request,
+        "energy.html",
+        {
+            "t": translator(lang, _CATALOGS),
+            "lang": lang,
+            "html_lang": html_lang(lang),
+            "view": view_model,
+            "tz": api_ctx.tz,
+            "active_nav": "energy",
+            "csrf_token": csrf_token(security.app_secret, csrf_cookie),
+            "show_logout": _show_logout(request, security),
+        },
+    )
+    response.set_cookie(DEVICE_COOKIE, str(selected_id), max_age=_COOKIE_MAX_AGE_S, samesite="lax")
+    if csrf_cookie_is_new:
+        set_csrf_cookie(response, csrf_cookie, secure=request.url.scheme == "https")
+    return response
+
+
+@router.get("/grid", response_class=HTMLResponse)
+def grid_page(
+    request: Request,
+    device: int | None = None,
+    start: int | None = Query(None, alias="from"),
+    end: int | None = Query(None, alias="to"),
+) -> HTMLResponse:
+    """grid page (SDD slice 30/task 20.3-20.7's page half): the
+    voltage/frequency chart, daily min/max ranges, summary cards
+    (typical voltage, lowest/highest, frequency stability), and a
+    plain-language explanation of what's healthy for the configured
+    outage threshold.
+
+    Reuses `RollupStore.grid_between` directly -- the same reader
+    `web.routes.api.grid_daily_route` already calls -- for both the
+    stat cards and the chart's own fallback table, rather than
+    extracting the bucketing-into-windows logic `grid_series_route`
+    keeps inline."""
+    ctx: PagesContext = request.app.state.pages
+    api_ctx: ApiContext = request.app.state.api
+    security: SecurityContext = request.app.state.security
+    lang = _resolve_lang(request, ctx)
+    selected_id = _resolve_device(request, ctx, device)
+    csrf_cookie, csrf_cookie_is_new = csrf_cookie_value(request)
+
+    range_end = end if end is not None else int(ctx.now().timestamp())
+    range_start = start if start is not None else range_end - _GRID_DEFAULT_RANGE_S
+
+    rows = _rollup_store(request).grid_between(
+        selected_id, local_day(range_start, api_ctx.tz), local_day(range_end, api_ctx.tz)
+    )
+
+    view_model = build_grid_view_model(
+        device_records=ctx.device_records,
+        selected_device_id=selected_id,
+        range_start=range_start,
+        range_end=range_end,
+        rows=rows,
+        threshold_v=api_ctx.detector_config.threshold_v,
+        series_src=f"/api/v1/grid/series?device={selected_id}&from={range_start}&to={range_end}",
+    )
+    response = TEMPLATES.TemplateResponse(
+        request,
+        "grid.html",
+        {
+            "t": translator(lang, _CATALOGS),
+            "lang": lang,
+            "html_lang": html_lang(lang),
+            "view": view_model,
+            "tz": api_ctx.tz,
+            "active_nav": "grid",
             "csrf_token": csrf_token(security.app_secret, csrf_cookie),
             "show_logout": _show_logout(request, security),
         },

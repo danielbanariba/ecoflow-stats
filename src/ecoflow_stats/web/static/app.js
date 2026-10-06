@@ -550,6 +550,153 @@ function initBatteryTrendChart(el) {
     });
 }
 
+// The energy page's bar chart is client-fetched from its own `data-src`
+// (the same `/api/v1/energy/daily` JSON the periods table itself is
+// built from server-side -- never a second copy of that computation).
+// Two bars per period: total energy in (every charge source summed) and
+// total energy out (every discharge source summed) -- the per-source
+// breakdown stays in the fallback table, this chart only shows the two
+// headline flows so it reads clearly at a glance.
+function initEnergyBarChart(el) {
+  const src = el.dataset.src;
+  if (!src) {
+    return;
+  }
+  fetch(src)
+    .then((response) => response.json())
+    .then((body) => {
+      const periods = body.periods.map((period) => period.period);
+      const energyIn = body.periods.map(
+        (period) => (period.chg_ac_wh + period.chg_dc_wh + period.chg_solar_wh) / 1000,
+      );
+      const energyOut = body.periods.map((period) => (period.dsg_ac_wh + period.dsg_dc_wh) / 1000);
+      const chart = window.echarts.init(el, null, { renderer: "svg" });
+      chart.setOption({
+        animation: !prefersReducedMotion(),
+        animationDuration: 600,
+        animationEasing: "cubicOut",
+        tooltip: { ...CHART_TOOLTIP_BASE, trigger: "axis" },
+        grid: { left: 8, right: 8, top: 16, bottom: 28, containLabel: true },
+        xAxis: {
+          type: "category",
+          data: periods,
+          axisLine: { lineStyle: { color: CHART_COLOR.axisLine } },
+          axisTick: { show: false },
+          axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10, interval: "auto", hideOverlap: true },
+          splitLine: { show: false },
+        },
+        yAxis: {
+          type: "value",
+          name: "kWh",
+          nameTextStyle: { color: CHART_COLOR.textMuted, fontSize: 10 },
+          axisLine: { show: false },
+          axisTick: { show: false },
+          axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10 },
+          splitLine: { lineStyle: { color: CHART_COLOR.splitLine } },
+        },
+        series: [
+          {
+            name: "in",
+            type: "bar",
+            itemStyle: { color: CHART_COLOR.present, borderRadius: 3 },
+            data: energyIn,
+          },
+          {
+            name: "out",
+            type: "bar",
+            itemStyle: { color: CHART_COLOR.absent, borderRadius: 3 },
+            data: energyOut,
+          },
+        ],
+      });
+      window.addEventListener("resize", () => chart.resize());
+    })
+    .catch(() => {
+      el.setAttribute("data-chart-error", "true");
+    });
+}
+
+// The grid page's voltage/frequency chart is client-fetched from its
+// own `data-src` (the same `/api/v1/grid/series` JSON the chart's own
+// fallback table is built from, bucketed at 5 min/1 h/1 day depending
+// on range length -- API-picked, never re-derived here). Voltage and
+// frequency share no common scale, so this mirrors
+// `initBatteryTrendChart`'s dual-y-axis pattern rather than forcing
+// both onto one axis.
+function initGridSeriesChart(el) {
+  const src = el.dataset.src;
+  if (!src) {
+    return;
+  }
+  fetch(src)
+    .then((response) => response.json())
+    .then((body) => {
+      const voltage = body.points.map((point) => [point.ts * 1000, point.grid_v_avg]);
+      const frequency = body.points.map((point) => [point.ts * 1000, point.grid_hz_avg]);
+      const chart = window.echarts.init(el, null, { renderer: "svg" });
+      chart.setOption({
+        animation: !prefersReducedMotion(),
+        animationDuration: 800,
+        animationEasing: "cubicOut",
+        tooltip: { ...CHART_TOOLTIP_BASE, trigger: "axis" },
+        grid: { left: 8, right: 8, top: 16, bottom: 28, containLabel: true },
+        xAxis: {
+          type: "time",
+          axisLine: { lineStyle: { color: CHART_COLOR.axisLine } },
+          axisTick: { show: false },
+          axisLabel: { color: CHART_COLOR.textMuted, fontSize: 11, hideOverlap: true },
+          splitLine: { show: false },
+        },
+        yAxis: [
+          {
+            type: "value",
+            name: "V",
+            nameTextStyle: { color: CHART_COLOR.textMuted, fontSize: 10 },
+            axisLine: { show: false },
+            axisTick: { show: false },
+            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10 },
+            splitLine: { lineStyle: { color: CHART_COLOR.splitLine } },
+          },
+          {
+            type: "value",
+            name: "Hz",
+            nameTextStyle: { color: CHART_COLOR.textMuted, fontSize: 10 },
+            axisLine: { show: false },
+            axisTick: { show: false },
+            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10 },
+            splitLine: { show: false },
+          },
+        ],
+        series: [
+          {
+            name: "voltage",
+            type: "line",
+            yAxisIndex: 0,
+            showSymbol: false,
+            connectNulls: false,
+            smooth: 0.3,
+            lineStyle: { width: 2.5, color: CHART_COLOR.present },
+            data: voltage,
+          },
+          {
+            name: "frequency",
+            type: "line",
+            yAxisIndex: 1,
+            showSymbol: false,
+            connectNulls: false,
+            smooth: 0.3,
+            lineStyle: { width: 2, color: CHART_COLOR.unknown },
+            data: frequency,
+          },
+        ],
+      });
+      window.addEventListener("resize", () => chart.resize());
+    })
+    .catch(() => {
+      el.setAttribute("data-chart-error", "true");
+    });
+}
+
 function initCharts() {
   if (typeof window.echarts === "undefined") {
     return; // this page did not load echarts.min.js
@@ -566,6 +713,10 @@ function initCharts() {
       initSocLineChart(el);
     } else if (el.dataset.chart === "battery-trend") {
       initBatteryTrendChart(el);
+    } else if (el.dataset.chart === "energy-bars") {
+      initEnergyBarChart(el);
+    } else if (el.dataset.chart === "grid-series") {
+      initGridSeriesChart(el);
     }
     el.dataset.chartInitialized = "true";
   });

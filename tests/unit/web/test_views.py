@@ -21,9 +21,13 @@ from ecoflow_stats.outages.aggregates import OutageAggregates
 from ecoflow_stats.outages.model import Gap
 from ecoflow_stats.outages.resolve import EffectiveOutage
 from ecoflow_stats.storage.devices import DeviceRecord
+from ecoflow_stats.storage.rollups import DailyGridRollup
 from ecoflow_stats.web.views import (
     OutagesSummary,
     build_device_options,
+    build_energy_period_row,
+    build_energy_view_model,
+    build_grid_view_model,
     build_mains_strip_segments,
     build_outage_event_rows,
     build_outages_summary,
@@ -577,3 +581,260 @@ def test_build_outages_view_model_assembles_every_part_without_dropping_fields()
     assert view.legacy_review_count == 5
     assert view.mains_strip_src == "/api/v1/mains-strip?device=7"
     assert view.mains_strip[0].start_ts == _RANGE_START
+
+
+def _energy_period_dict(
+    period: str,
+    *,
+    chg_ac_wh: float = 0.0,
+    chg_dc_wh: float = 0.0,
+    chg_solar_wh: float = 0.0,
+    dsg_ac_wh: float = 0.0,
+    dsg_dc_wh: float = 0.0,
+    chg_ac_est_wh: float = 0.0,
+    cost: float | str = "unavailable",
+    currency: str = "",
+    flags: list[str] | None = None,
+) -> dict[str, object]:
+    """Shaped exactly like `web.routes.api.build_energy_periods`'s own
+    period dicts -- `build_energy_period_row` only ever reshapes that
+    already-computed output, so these tests hand-build the same shape
+    rather than re-deriving it from raw rollup rows."""
+    return {
+        "period": period,
+        "chg_ac_wh": chg_ac_wh,
+        "chg_dc_wh": chg_dc_wh,
+        "chg_solar_wh": chg_solar_wh,
+        "dsg_ac_wh": dsg_ac_wh,
+        "dsg_dc_wh": dsg_dc_wh,
+        "chg_ac_est_wh": chg_ac_est_wh,
+        "cost": cost,
+        "currency": currency,
+        "flags": flags or [],
+    }
+
+
+def test_build_energy_period_row_reads_every_field_from_its_own_dict_key() -> None:
+    """Pass-1: catches a wrong dict key being read for this row (e.g.
+    swapping `chg_dc_wh`/`dsg_dc_wh`, or dropping `flags`), which would
+    silently show the wrong source's energy on the page without ever
+    raising."""
+    row = build_energy_period_row(
+        _energy_period_dict(
+            "2026-01-08",
+            chg_ac_wh=1.0,
+            chg_dc_wh=2.0,
+            chg_solar_wh=3.0,
+            dsg_ac_wh=4.0,
+            dsg_dc_wh=5.0,
+            chg_ac_est_wh=6.0,
+            cost=0.5,
+            currency="USD",
+            flags=["counter_reset"],
+        )
+    )
+    assert row.period == "2026-01-08"
+    assert row.chg_ac_wh == 1.0
+    assert row.chg_dc_wh == 2.0
+    assert row.chg_solar_wh == 3.0
+    assert row.dsg_ac_wh == 4.0
+    assert row.dsg_dc_wh == 5.0
+    assert row.chg_ac_est_wh == 6.0
+    assert row.cost == 0.5
+    assert row.currency == "USD"
+    assert row.flags == ("counter_reset",)
+
+
+def test_build_energy_view_model_sums_in_and_out_across_every_period() -> None:
+    """energy requirement "Daily Energy by Source and Direction": the
+    summary cards' totals. Pass-1: catches summing the wrong fields
+    (e.g. including `dsg_ac_wh` in `total_in_wh`) or forgetting a
+    period, which would silently misreport the device's real energy
+    flow."""
+    periods = [
+        _energy_period_dict(
+            "2026-01-07", chg_ac_wh=1_000.0, chg_dc_wh=0.0, chg_solar_wh=500.0, dsg_ac_wh=200.0
+        ),
+        _energy_period_dict(
+            "2026-01-08", chg_ac_wh=2_000.0, chg_dc_wh=100.0, chg_solar_wh=0.0, dsg_ac_wh=300.0
+        ),
+    ]
+    view = build_energy_view_model(
+        device_records=(_device(1, "SN0001"),),
+        selected_device_id=1,
+        range_start=_RANGE_START,
+        range_end=_RANGE_END,
+        granularity="daily",
+        periods=periods,
+        tariff=None,
+        currency="",
+        series_src="/api/v1/energy/daily?device=1",
+    )
+    assert view.total_in_wh == 1_000.0 + 500.0 + 2_000.0 + 100.0
+    assert view.total_out_wh == 200.0 + 300.0
+
+
+def test_build_energy_view_model_reports_cost_unavailable_without_a_tariff() -> None:
+    """Energy scenario "No configured tariff shows energy without a
+    fabricated cost". Pass-1: catches the total silently rendering as
+    a fabricated `0` instead of the honest `"unavailable"` the spec
+    requires when `tariff` is `None` -- the trap a naive `sum()` over
+    each period's own `"unavailable"` string would fall into."""
+    periods = [_energy_period_dict("2026-01-08", chg_ac_wh=5_000.0, cost="unavailable")]
+    view = build_energy_view_model(
+        device_records=(_device(1, "SN0001"),),
+        selected_device_id=1,
+        range_start=_RANGE_START,
+        range_end=_RANGE_END,
+        granularity="daily",
+        periods=periods,
+        tariff=None,
+        currency="",
+        series_src="/api/v1/energy/daily?device=1",
+    )
+    assert view.total_cost == "unavailable"
+    assert view.best_day is None
+    assert view.worst_day is None
+
+
+def test_build_energy_view_model_ranks_best_and_worst_day_by_cost() -> None:
+    """Resolved semantics (apply-progress-pages): best/worst day ranked
+    by cost, lowest and highest. Pass-1: catches the ranking picking
+    the wrong period (e.g. by raw Wh instead of cost, or reversing
+    best/worst), which would recommend the wrong day as cheapest."""
+    periods = [
+        _energy_period_dict("2026-01-06", chg_ac_wh=1_000.0, cost=0.20, currency="USD"),
+        _energy_period_dict("2026-01-07", chg_ac_wh=5_000.0, cost=1.00, currency="USD"),
+        _energy_period_dict("2026-01-08", chg_ac_wh=2_000.0, cost=0.40, currency="USD"),
+    ]
+    view = build_energy_view_model(
+        device_records=(_device(1, "SN0001"),),
+        selected_device_id=1,
+        range_start=_RANGE_START,
+        range_end=_RANGE_END,
+        granularity="daily",
+        periods=periods,
+        tariff=0.20,
+        currency="USD",
+        series_src="/api/v1/energy/daily?device=1",
+    )
+    assert view.total_cost == 1.60
+    assert view.best_day is not None
+    assert view.best_day.period == "2026-01-06"
+    assert view.worst_day is not None
+    assert view.worst_day.period == "2026-01-07"
+
+
+def _grid_row(
+    day: str,
+    *,
+    grid_v_min: float | None = None,
+    grid_v_avg: float | None = None,
+    grid_v_max: float | None = None,
+    grid_hz_min: float | None = None,
+    grid_hz_avg: float | None = None,
+    grid_hz_max: float | None = None,
+    grid_readings: int = 0,
+) -> DailyGridRollup:
+    return DailyGridRollup(
+        device_id=1,
+        day=day,
+        grid_v_min=grid_v_min,
+        grid_v_avg=grid_v_avg,
+        grid_v_max=grid_v_max,
+        grid_hz_min=grid_hz_min,
+        grid_hz_avg=grid_hz_avg,
+        grid_hz_max=grid_hz_max,
+        grid_readings=grid_readings,
+    )
+
+
+def test_build_grid_view_model_excludes_a_no_data_day_from_the_voltage_average() -> None:
+    """grid-quality requirement "Daily Voltage and Frequency Ranges",
+    scenario "A day with no grid-present samples reports no range".
+    Pass-1: catches a no-data day's `None` fields pulling `typical_v`
+    toward zero (e.g. via a naive `sum(...) / len(rows)` over every
+    row including the empty one), which would understate a healthy
+    grid's real average voltage."""
+    rows = [
+        _grid_row(
+            "2026-01-07", grid_v_min=228.0, grid_v_avg=230.0, grid_v_max=232.0, grid_readings=10
+        ),
+        _grid_row("2026-01-08"),  # no grid-present reading at all
+        _grid_row(
+            "2026-01-09", grid_v_min=226.0, grid_v_avg=228.0, grid_v_max=230.0, grid_readings=8
+        ),
+    ]
+    view = build_grid_view_model(
+        device_records=(_device(1, "SN0001"),),
+        selected_device_id=1,
+        range_start=_RANGE_START,
+        range_end=_RANGE_END,
+        rows=rows,
+        threshold_v=50.0,
+        series_src="/api/v1/grid/series?device=1",
+    )
+    assert view.typical_v == (230.0 + 228.0) / 2
+    assert view.lowest_v == 226.0
+    assert view.highest_v == 232.0
+    assert view.days_with_data == 2
+    assert view.days_analyzed == 3
+
+
+def test_build_grid_view_model_reports_frequency_unavailable_separately_from_voltage() -> None:
+    """`grid.quality.grid_quality_range`'s own documented asymmetry: a
+    present reading can still lack frequency (`judge()` never looks at
+    it), so a day can have a real voltage range with no frequency range
+    at all. Pass-1: catches treating "no frequency" the same as "no
+    voltage" (e.g. by reusing the voltage-present filter for frequency
+    too), which would silently fabricate a frequency range from a day
+    that reported none."""
+    rows = [
+        _grid_row(
+            "2026-01-07", grid_v_min=228.0, grid_v_avg=230.0, grid_v_max=232.0, grid_readings=10
+        ),
+        _grid_row(
+            "2026-01-08",
+            grid_v_min=227.0,
+            grid_v_avg=229.0,
+            grid_v_max=231.0,
+            grid_hz_min=59.8,
+            grid_hz_avg=60.0,
+            grid_hz_max=60.2,
+            grid_readings=12,
+        ),
+    ]
+    view = build_grid_view_model(
+        device_records=(_device(1, "SN0001"),),
+        selected_device_id=1,
+        range_start=_RANGE_START,
+        range_end=_RANGE_END,
+        rows=rows,
+        threshold_v=50.0,
+        series_src="/api/v1/grid/series?device=1",
+    )
+    assert view.lowest_hz == 59.8
+    assert view.highest_hz == 60.2
+    assert view.days_with_data == 2
+
+
+def test_build_grid_view_model_propagates_threshold_v_and_devices() -> None:
+    """Pass-1: catches the page silently showing a hardcoded or default
+    threshold instead of the real configured
+    `DetectorConfig.threshold_v` the plain-language explanation refers
+    to."""
+    view = build_grid_view_model(
+        device_records=(_device(9, "SN0009"),),
+        selected_device_id=9,
+        range_start=_RANGE_START,
+        range_end=_RANGE_END,
+        rows=[],
+        threshold_v=42.5,
+        series_src="/api/v1/grid/series?device=9",
+    )
+    assert view.threshold_v == 42.5
+    assert view.selected_device_id == 9
+    assert view.devices[0].id == 9
+    assert view.typical_v is None
+    assert view.days_with_data == 0
+    assert view.days_analyzed == 0

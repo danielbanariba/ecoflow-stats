@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}{{ t('energy.page.title') }} · {{ t('app.name') }}{% endblock %}
+{% block content %}
+<div class="page-head reveal">
+  <p class="eyebrow page-head__eyebrow">{{ t('energy.page.eyebrow').format(start=format_local_dt(view.range_start, tz)[:10], end=format_local_dt(view.range_end, tz)[:10]) }}</p>
+  <h1 class="page-head__title">{{ t('energy.page.title') }}</h1>
+</div>
+
+<section class="device-selector-section reveal" aria-label="{{ t('device.selector.label') }}">
+  {{ macros.device_selector(view.devices, t, action='/energy') }}
+</section>
+
+<section class="energy-summary-section" aria-label="{{ t('energy.summary.heading') }}">
+  <h2 class="reveal">{{ t('energy.summary.heading') }}</h2>
+  <dl class="stat-grid mt-6">
+    <div class="stat-card reveal">
+      <dt>{{ t('energy.summary.total_in_label') }}</dt>
+      <dd>{{ t('energy.kwh_value').format(kwh=((view.total_in_wh / 1000) | round(2))) }}</dd>
+    </div>
+    <div class="stat-card reveal">
+      <dt>{{ t('energy.summary.total_out_label') }}</dt>
+      <dd>{{ t('energy.kwh_value').format(kwh=((view.total_out_wh / 1000) | round(2))) }}</dd>
+    </div>
+    <div class="stat-card reveal">
+      <dt>{{ t('energy.summary.total_cost_label') }}</dt>
+      <dd>
+        {% if view.total_cost == "unavailable" %}
+          {{ t('common.unavailable') }}
+        {% else %}
+          {{ t('energy.cost_value').format(amount=("%.2f"|format(view.total_cost)), currency=view.currency) }}
+        {% endif %}
+      </dd>
+    </div>
+    <div class="stat-card reveal">
+      <dt>{{ t('energy.summary.best_day_label') }}</dt>
+      <dd>
+        {% if view.best_day is not none %}
+          {{ view.best_day.period }} · {{ t('energy.cost_value').format(amount=("%.2f"|format(view.best_day.cost)), currency=view.currency) }}
+        {% else %}
+          {{ t('common.unavailable') }}
+        {% endif %}
+      </dd>
+    </div>
+    <div class="stat-card reveal">
+      <dt>{{ t('energy.summary.worst_day_label') }}</dt>
+      <dd>
+        {% if view.worst_day is not none %}
+          {{ view.worst_day.period }} · {{ t('energy.cost_value').format(amount=("%.2f"|format(view.worst_day.cost)), currency=view.currency) }}
+        {% else %}
+          {{ t('common.unavailable') }}
+        {% endif %}
+      </dd>
+    </div>
+  </dl>
+  {% if view.total_cost == "unavailable" %}
+  <p class="reveal mt-6 text-muted">{{ t('energy.cost.no_tariff_note') }}</p>
+  {% endif %}
+</section>
+
+<section class="energy-chart-section" aria-label="{{ t('energy.chart.heading') }}">
+  <h2 class="reveal">{{ t('energy.chart.heading') }}</h2>
+  <div class="chart-card reveal mt-6">
+    <div class="chart-card__head">
+      {#
+        Data-driven insight caption (never a static placeholder): names
+        the real cheapest period from this exact range's own
+        `best_day`/`worst_day`, or explains why none is shown yet.
+      #}
+      <p class="text-muted text-caption">
+        {% if view.total_cost == "unavailable" %}
+          {{ t('energy.insight.no_tariff') }}
+        {% elif view.best_day is not none %}
+          {{ t('energy.insight.best_day').format(period=view.best_day.period, cost=("%.2f"|format(view.best_day.cost)), currency=view.currency) }}
+        {% else %}
+          {{ t('energy.insight.no_data') }}
+        {% endif %}
+      </p>
+      <div class="legend-row">
+        <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--present"></span>{{ t('energy.chart.legend.in') }}</span>
+        <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--outage"></span>{{ t('energy.chart.legend.out') }}</span>
+      </div>
+    </div>
+    {% call macros.chart_with_fallback('energy-bars-chart', 'energy-bars', t('energy.chart.aria_label'), t('chart.fallback_label'), src=view.series_src) %}
+      {% if view.periods %}
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">{{ t('energy.table.period') }}</th>
+            <th scope="col">{{ t('energy.table.in') }}</th>
+            <th scope="col">{{ t('energy.table.out') }}</th>
+            <th scope="col">{{ t('energy.table.cost') }}</th>
+            <th scope="col">{{ t('energy.table.flags') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in view.periods %}
+          <tr>
+            <td>{{ row.period }}</td>
+            <td class="num">{{ t('energy.kwh_value').format(kwh=(((row.chg_ac_wh + row.chg_dc_wh + row.chg_solar_wh) / 1000) | round(2))) }}</td>
+            <td class="num">{{ t('energy.kwh_value').format(kwh=(((row.dsg_ac_wh + row.dsg_dc_wh) / 1000) | round(2))) }}</td>
+            <td class="num">{% if row.cost == "unavailable" %}{{ t('common.unavailable') }}{% else %}{{ t('energy.cost_value').format(amount=("%.2f"|format(row.cost)), currency=row.currency) }}{% endif %}</td>
+            <td>
+              {% for flag in row.flags %}<span class="badge badge--uncertain">{{ t('energy.flags.' ~ flag) }}</span>{% endfor %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p>{{ t('energy.table.empty') }}</p>
+      {% endif %}
+    {% endcall %}
+  </div>
+</section>
+
+<script src="/static/vendor/echarts.min.js" defer></script>
+{% endblock %}

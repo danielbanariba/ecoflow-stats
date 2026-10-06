@@ -10,6 +10,7 @@ SQLite stores -- no real collector, no real composition root. Mirrors
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from itertools import pairwise
 from pathlib import Path
@@ -21,8 +22,28 @@ from ecoflow_stats.outages.model import Decision, DetectorConfig, Event, Gap
 from ecoflow_stats.storage.database import Database
 from ecoflow_stats.storage.decisions import DecisionStore
 from ecoflow_stats.storage.devices import DeviceStore
+from ecoflow_stats.storage.imports import ImportRunStore
+from ecoflow_stats.storage.legacy import LegacyStore
 from ecoflow_stats.storage.outages import OutageStore
 from ecoflow_stats.web.routes.api import ApiContext, router
+
+
+@dataclass(frozen=True, slots=True)
+class _StubDatabase:
+    """The one attribute `web.routes.api._legacy_store` reads off the
+    real `bootstrap.Application` (`application.database.writer`) --
+    this harness mounts only the `api` router against a hand-built
+    `ApiContext`, with no real composition root, so it stands in for
+    just that one cross-context read rather than constructing a full
+    `Application`."""
+
+    writer: object
+
+
+@dataclass(frozen=True, slots=True)
+class _StubApplication:
+    database: _StubDatabase
+
 
 _NOW = datetime(2026, 1, 10, 0, 0, tzinfo=UTC)
 _NOW_TS = int(_NOW.timestamp())
@@ -88,6 +109,7 @@ def _client(
         decision_store=DecisionStore(db.writer),
         tz="UTC",
     )
+    app.state.application = _StubApplication(database=_StubDatabase(writer=db.writer))
     app.include_router(router)
     return TestClient(app), db, record.id
 
@@ -114,6 +136,62 @@ def test_outages_route_returns_phase_11s_aggregates_for_the_selected_range(
         assert body["count"] == 1
         assert body["total_downtime_s"] == 600
         assert body["longest_s"] == 600
+    finally:
+        db.close()
+
+
+def test_outages_route_counts_a_real_legacy_outage_but_excludes_an_unconfirmed_phantom(
+    tmp_path: Path,
+) -> None:
+    """DATA-02 (qa-report-data-01.md): legacy outages imported from
+    `outages.log` were never reconciled into statistics at all --
+    `_reconcile` hardcoded `legacy=()` because `LegacyStore` had no
+    range query. Proves both halves end-to-end through the real
+    `/api/v1/outages` route: a non-phantom legacy entry is counted,
+    and a `suspected_phantom` one stays excluded until a decision
+    confirms it (the same honesty `resolve()`'s own unit tests already
+    prove for the pure function -- this proves the production wiring
+    that used to skip it entirely)."""
+    client, db, device_id = _client(tmp_path)
+    try:
+        import_id = ImportRunStore(db.writer).start(device_id, started_at=1, source_tz="UTC")
+        legacy_store = LegacyStore(db.writer)
+        real_start = _RANGE_START + 1_000
+        legacy_store.upsert(
+            device_id=device_id,
+            start_ts=real_start,
+            end_ts=real_start + 600,
+            soc_start=90,
+            soc_end=80,
+            logged_minutes=10,
+            start_line="corte",
+            end_line="retorno",
+            source_tz="UTC",
+            flags=frozenset(),
+            import_id=import_id,
+        )
+        phantom_start = _RANGE_START + 50_000
+        legacy_store.upsert(
+            device_id=device_id,
+            start_ts=phantom_start,
+            end_ts=phantom_start + 300,
+            soc_start=0,
+            soc_end=0,
+            logged_minutes=5,
+            start_line="corte",
+            end_line="retorno",
+            source_tz="UTC",
+            flags=frozenset({"suspected_phantom"}),
+            import_id=import_id,
+        )
+
+        response = client.get("/api/v1/outages", params=_range_query(device_id))
+
+        assert response.status_code == 200
+        body = response.json()
+        # Only the real (non-phantom) legacy entry is counted.
+        assert body["count"] == 1
+        assert body["total_downtime_s"] == 600
     finally:
         db.close()
 

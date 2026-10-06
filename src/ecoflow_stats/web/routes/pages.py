@@ -20,6 +20,7 @@ from ecoflow_stats.battery.stats import DailyBatteryTrend
 from ecoflow_stats.live_status.service import get_status
 from ecoflow_stats.outages.aggregates import compute_aggregates
 from ecoflow_stats.outages.resolve import resolve, unresolved_gaps
+from ecoflow_stats.storage.legacy import LegacyStore
 from ecoflow_stats.storage.rollups import RollupStore
 from ecoflow_stats.storage.state import set_session_generation
 from ecoflow_stats.timeutil import relative_time_unit
@@ -121,7 +122,19 @@ def _show_logout(request: Request, security: SecurityContext) -> bool:
     return security.password is not None and has_valid_session(request, security)
 
 
-def _live_view(ctx: PagesContext, api_ctx: ApiContext, device_id: int) -> OverviewViewModel:
+def _legacy_store(request: Request) -> LegacyStore:
+    """`LegacyStore` built from the real `Application`'s own writer
+    connection, read cross-context from `request.app.state.application`
+    -- the same choice `_rollup_store` below and `web.routes.actions.
+    _legacy_store` already make, rather than adding a new `PagesContext`
+    field (`web/app.py` is outside this slice's declared edit surface)."""
+    application = request.app.state.application
+    return LegacyStore(application.database.writer)
+
+
+def _live_view(
+    request: Request, ctx: PagesContext, api_ctx: ApiContext, device_id: int
+) -> OverviewViewModel:
     """Builds the overview's full view model, including its fixed
     30-day outage summary (UI-04/UI-05) -- reuses the exact same
     `resolve`/`compute_aggregates`/`build_outages_summary` pipeline
@@ -143,11 +156,12 @@ def _live_view(ctx: PagesContext, api_ctx: ApiContext, device_id: int) -> Overvi
     range_start = range_end - _OVERVIEW_OUTAGES_WINDOW_S
     events = ctx.outage_store.events(device_id, range_start, range_end)
     gaps = ctx.outage_store.gaps(device_id, range_start, range_end)
+    legacy = _legacy_store(request).between(device_id, range_start, range_end)
     decisions = (
         api_ctx.decision_store.active(device_id) if api_ctx.decision_store is not None else []
     )
     resolved = resolve(
-        detected=events, gaps=gaps, legacy=(), decisions=decisions, range_end=range_end
+        detected=events, gaps=gaps, legacy=legacy, decisions=decisions, range_end=range_end
     )
     aggregates = compute_aggregates(
         outages=resolved.outages, range_start=range_start, range_end=range_end, tz=api_ctx.tz
@@ -174,7 +188,7 @@ def overview_page(request: Request, device: int | None = None) -> HTMLResponse:
     security: SecurityContext = request.app.state.security
     lang = _resolve_lang(request, ctx)
     selected_id = _resolve_device(request, ctx, device)
-    view = _live_view(ctx, api_ctx, selected_id)
+    view = _live_view(request, ctx, api_ctx, selected_id)
     csrf_cookie, csrf_cookie_is_new = csrf_cookie_value(request)
     response = TEMPLATES.TemplateResponse(
         request,
@@ -202,7 +216,7 @@ def live_partial(request: Request, device: int | None = None) -> HTMLResponse:
     api_ctx: ApiContext = request.app.state.api
     lang = _resolve_lang(request, ctx)
     selected_id = _resolve_device(request, ctx, device)
-    view = _live_view(ctx, api_ctx, selected_id)
+    view = _live_view(request, ctx, api_ctx, selected_id)
     return TEMPLATES.TemplateResponse(
         request,
         "partials/live.html",
@@ -240,10 +254,13 @@ def outages_page(
 
     events = ctx.outage_store.events(selected_id, range_start, range_end)
     gaps = ctx.outage_store.gaps(selected_id, range_start, range_end)
+    legacy = _legacy_store(request).between(selected_id, range_start, range_end)
     decisions = (
         api_ctx.decision_store.active(selected_id) if api_ctx.decision_store is not None else []
     )
-    view = resolve(detected=events, gaps=gaps, legacy=(), decisions=decisions, range_end=range_end)
+    view = resolve(
+        detected=events, gaps=gaps, legacy=legacy, decisions=decisions, range_end=range_end
+    )
     aggregates = compute_aggregates(
         outages=view.outages, range_start=range_start, range_end=range_end, tz=api_ctx.tz
     )

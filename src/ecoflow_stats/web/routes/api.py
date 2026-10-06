@@ -30,6 +30,7 @@ from ecoflow_stats.live_status.service import get_status
 from ecoflow_stats.outages.aggregates import compute_aggregates
 from ecoflow_stats.outages.resolve import resolve, unresolved_gaps
 from ecoflow_stats.rollups.service import decode_energy_flags
+from ecoflow_stats.storage.legacy import LegacyStore
 from ecoflow_stats.storage.rollups import RollupStore
 from ecoflow_stats.timeutil import local_day
 
@@ -99,7 +100,8 @@ class ApiContext:
     """`None` when no decision store is wired (never happens in
     production -- `web.app._build_api_context` always wires the real
     one); treated as "no active decisions yet" rather than failing, the
-    same honest-default style as `resolve()`'s own `legacy=()` here."""
+    same honest-default style `_reconcile` uses for an empty decision
+    list."""
     tz: str = "UTC"
     tariff: float | None = None
     """The configured flat tariff price per kWh (`Settings.tariff`),
@@ -195,27 +197,43 @@ def _rollup_store(request: Request) -> RollupStore:
     return RollupStore(application.database.writer)
 
 
-def _reconcile(ctx: ApiContext, device_id: int, range_start: int, range_end: int) -> EffectiveView:
-    """Fetch this device's detected events and gaps for `[range_start,
-    range_end]`, and every active decision, then hand them to Phase 11's
-    `resolve()` -- the same reconciliation pipeline that module's own unit
-    tests already exercise.
+def _legacy_store(request: Request) -> LegacyStore:
+    """`LegacyStore` built from the real `Application`'s own writer
+    connection, read cross-context from `request.app.state.application`
+    -- the same choice `_rollup_store` above already makes, and
+    `web.routes.actions._legacy_store` already uses, rather than adding
+    a new `ApiContext` field (`web/app.py` is outside this slice's
+    declared edit surface)."""
+    application = request.app.state.application
+    return LegacyStore(application.database.writer)
 
-    `legacy` is always empty: `storage.legacy.LegacyStore` currently has
-    no range query (only `get(device_id, start_ts)`, an exact lookup), so
-    no production caller can fetch "every legacy entry overlapping a
-    range" yet. Extending it is a storage-layer change outside this
-    route's edit surface; tracked as a known gap (apply-progress)."""
+
+def _reconcile(
+    request: Request, ctx: ApiContext, device_id: int, range_start: int, range_end: int
+) -> EffectiveView:
+    """Fetch this device's detected events, gaps, and legacy-imported
+    outages for `[range_start, range_end]`, and every active decision,
+    then hand them to Phase 11's `resolve()` -- the same reconciliation
+    pipeline that module's own unit tests already exercise.
+
+    `legacy` is now real data (DATA-02, qa-report-data-01.md): it used
+    to always be empty here because `storage.legacy.LegacyStore` had no
+    range query -- only `get(device_id, start_ts)`, an exact lookup --
+    so no production caller could fetch "every legacy entry overlapping
+    a range". `LegacyStore.between()` closes that gap."""
     events = ctx.outage_store.events(device_id, range_start, range_end)
     gaps = ctx.outage_store.gaps(device_id, range_start, range_end)
+    legacy = _legacy_store(request).between(device_id, range_start, range_end)
     decisions = ctx.decision_store.active(device_id) if ctx.decision_store is not None else []
-    return resolve(detected=events, gaps=gaps, legacy=(), decisions=decisions, range_end=range_end)
+    return resolve(
+        detected=events, gaps=gaps, legacy=legacy, decisions=decisions, range_end=range_end
+    )
 
 
 def _compute_outage_aggregates(
-    ctx: ApiContext, device_id: int, range_start: int, range_end: int
+    request: Request, ctx: ApiContext, device_id: int, range_start: int, range_end: int
 ) -> OutageAggregates:
-    view = _reconcile(ctx, device_id, range_start, range_end)
+    view = _reconcile(request, ctx, device_id, range_start, range_end)
     return compute_aggregates(
         outages=view.outages, range_start=range_start, range_end=range_end, tz=ctx.tz
     )
@@ -361,7 +379,7 @@ def outages_route(
     ctx: ApiContext = request.app.state.api
     device_id = _resolve_device_id(ctx, device)
     range_start, range_end = _resolve_range(ctx, start, end)
-    aggregates = _compute_outage_aggregates(ctx, device_id, range_start, range_end)
+    aggregates = _compute_outage_aggregates(request, ctx, device_id, range_start, range_end)
     body = {
         "schema": _OUTAGES_SCHEMA,
         "device_id": device_id,
@@ -387,7 +405,7 @@ def outages_heatmap_route(
     ctx: ApiContext = request.app.state.api
     device_id = _resolve_device_id(ctx, device)
     range_start, range_end = _resolve_range(ctx, start, end)
-    aggregates = _compute_outage_aggregates(ctx, device_id, range_start, range_end)
+    aggregates = _compute_outage_aggregates(request, ctx, device_id, range_start, range_end)
     body = {
         "schema": _HEATMAP_SCHEMA,
         "device_id": device_id,
@@ -436,7 +454,7 @@ def mains_strip_route(
     ctx: ApiContext = request.app.state.api
     device_id = _resolve_device_id(ctx, device)
     range_start, range_end = _resolve_range(ctx, start, end)
-    view = _reconcile(ctx, device_id, range_start, range_end)
+    view = _reconcile(request, ctx, device_id, range_start, range_end)
     gaps = ctx.outage_store.gaps(device_id, range_start, range_end)
     segments = _build_mains_strip(view.outages, gaps, range_start, range_end)
     body = {

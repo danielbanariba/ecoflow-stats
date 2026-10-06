@@ -75,12 +75,19 @@ class LegacyStore:
         source_tz: str,
         flags: frozenset[str],
         import_id: int,
-    ) -> None:
+    ) -> bool:
         """Insert a new legacy event, or — only when the stored row is
         still open — close it with this call's end fields. Matches the
         design's documented guard exactly: every other column is
-        insert-or-ignore, never overwritten by a later import."""
-        self._conn.execute(
+        insert-or-ignore, never overwritten by a later import.
+
+        Returns whether this call actually changed anything (a fresh
+        insert, or an allowed close-the-open-event update) as opposed
+        to a true no-op re-import of an already-present, already-closed
+        row -- CLI-02 (qa-report-data-01.md): the import report needs
+        this to tell "inserted" apart from "already present", instead
+        of always claiming every parsed event as newly "imported"."""
+        cursor = self._conn.execute(
             """
             INSERT INTO legacy_outages
                 (device_id, start_ts, end_ts, soc_start, soc_end, logged_minutes,
@@ -108,6 +115,7 @@ class LegacyStore:
             ),
         )
         self._conn.commit()
+        return cursor.rowcount > 0
 
     def get(self, device_id: int, start_ts: int) -> LegacyOutage | None:
         row = self._conn.execute(
@@ -115,6 +123,20 @@ class LegacyStore:
             (device_id, start_ts),
         ).fetchone()
         return _row_to_outage(row) if row is not None else None
+
+    def between(self, device_id: int, start: int, end: int) -> list[LegacyOutage]:
+        """Legacy entries overlapping ``[start, end]``: started at or
+        before ``end``, and either still open or ended at or after
+        ``start`` -- the same overlap rule `storage.outages.OutageStore.
+        events`/`gaps` already use (DATA-02, qa-report-data-01.md: the
+        range query reconciliation needs, which `get()`'s exact-start
+        lookup alone could never provide)."""
+        rows = self._conn.execute(
+            f"SELECT {_SELECT_COLUMNS} FROM legacy_outages WHERE device_id = ? AND start_ts <= ?"
+            " AND (end_ts IS NULL OR end_ts >= ?) ORDER BY start_ts",
+            (device_id, end, start),
+        ).fetchall()
+        return [_row_to_outage(row) for row in rows]
 
 
 __all__ = ["LegacyOutage", "LegacyStore"]

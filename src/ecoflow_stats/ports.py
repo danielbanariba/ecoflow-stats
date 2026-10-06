@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from ecoflow_stats.devices.adapter import DeviceInfo
     from ecoflow_stats.devices.reading import Reading
     from ecoflow_stats.notifications.messages import AlertKey, Message, PendingAlert
-    from ecoflow_stats.outages.model import AppRunLike, Decision, Event, Gap
+    from ecoflow_stats.outages.model import AppRunLike, Decision, Event, Gap, LegacyOutageLike
     from ecoflow_stats.storage.derivations import Derivation
     from ecoflow_stats.storage.failures import FetchFailure
     from ecoflow_stats.storage.samples import StoredSample
@@ -124,6 +124,24 @@ class OutageStore(Protocol):
         ...
 
 
+class LegacyOutageStore(Protocol):
+    """Imported `outages.log` history: written once per event by the
+    history importer, read by `resolve()`'s reconciliation callers --
+    never replaced wholesale like `OutageStore`."""
+
+    def get(self, device_id: int, start_ts: int) -> LegacyOutageLike | None:
+        """Return the legacy entry starting exactly at ``start_ts``, or
+        ``None``."""
+        ...
+
+    def between(self, device_id: int, start: int, end: int) -> list[LegacyOutageLike]:
+        """Return legacy entries overlapping ``[start, end]`` -- the
+        range query `resolve()`'s callers need to reconcile legacy data
+        over a window, not just look one up by its exact start (DATA-02,
+        qa-report-data-01.md)."""
+        ...
+
+
 class DerivationStore(Protocol):
     """Per-device, per-named-derivation bookkeeping: algorithm version,
     parameter hash, incremental checkpoint, and dirty marker -- what lets a
@@ -211,6 +229,7 @@ __all__ = [
     "DerivationStore",
     "DeviceCloud",
     "FailureLog",
+    "LegacyOutageStore",
     "NotificationLedger",
     "Notifier",
     "Origin",

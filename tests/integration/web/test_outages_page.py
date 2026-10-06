@@ -27,6 +27,8 @@ from ecoflow_stats.config import load_settings
 from ecoflow_stats.jobs import SupervisedTask, SupervisedTaskHandle
 from ecoflow_stats.outages.model import Decision, Event, Gap
 from ecoflow_stats.storage.decisions import DecisionStore
+from ecoflow_stats.storage.imports import ImportRunStore
+from ecoflow_stats.storage.legacy import LegacyStore
 from ecoflow_stats.storage.outages import OutageStore
 from ecoflow_stats.web.app import create_app
 from tests.fakes import FakeClock
@@ -223,12 +225,9 @@ def test_the_events_table_shows_start_end_uncertainty_and_a_detected_source(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Scenario 3: "the events table with each event's start/end
-    uncertainty and source". A legacy-sourced row is proven at the pure
-    view-model layer (`tests/unit/web/test_views.py`) since
-    `storage.legacy.LegacyStore` has no range query yet (tracked gap,
-    apply-progress-batch13) -- no production path can reach this route
-    with a legacy-sourced event today, so only "detected" is exercised
-    here, honestly."""
+    uncertainty and source". A legacy-sourced row's own rendering is
+    covered by `test_a_real_imported_legacy_outage_appears_on_the_page`
+    below; this one exercises "detected"."""
     outage_ts = _RANGE_START + 2_000
     application, _device_id, client = _client(
         monkeypatch, tmp_path, events=[_event(outage_ts, outage_ts + 90, start_in_gap=True)]
@@ -241,6 +240,46 @@ def test_the_events_table_shows_start_end_uncertainty_and_a_detected_source(
         assert "Detected" in html
         assert "Start uncertain" in html
         assert "End uncertain" not in html
+    finally:
+        application.database.close()
+
+
+def test_a_real_imported_legacy_outage_appears_on_the_page(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """DATA-02 (qa-report-data-01.md): an outage imported from the
+    legacy `outages.log` used to never reach this page at all --
+    `outages_page` hardcoded `legacy=()` because `storage.legacy.
+    LegacyStore` had no range query (tracked gap, apply-progress-
+    batch13). Proves the full chain end-to-end: a legacy entry seeded
+    directly in storage (mirroring what `history_import.service.
+    run_import` actually writes) now shows up in both the summary
+    count and the events table as a "Legacy" source."""
+    application, device_id, client = _client(monkeypatch, tmp_path)
+    try:
+        import_id = ImportRunStore(application.database.writer).start(device_id, 1, "UTC")
+        legacy_start = _RANGE_START + 4_000
+        LegacyStore(application.database.writer).upsert(
+            device_id=device_id,
+            start_ts=legacy_start,
+            end_ts=legacy_start + 300,
+            soc_start=70,
+            soc_end=60,
+            logged_minutes=5,
+            start_line="corte",
+            end_line="retorno",
+            source_tz="UTC",
+            flags=frozenset(),
+            import_id=import_id,
+        )
+        application.database.writer.commit()
+
+        with client:
+            response = client.get("/outages")
+
+        html = response.text
+        assert _dd_value(html, "Outage count") == "1"
+        assert "Legacy" in html
     finally:
         application.database.close()
 

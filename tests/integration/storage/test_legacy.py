@@ -39,10 +39,16 @@ def test_inserting_the_same_event_twice_does_not_duplicate(tmp_path: Path) -> No
             "flags": frozenset(),
             "import_id": import_id,
         }
-        store.upsert(**kwargs)
-        store.upsert(**kwargs)
+        first = store.upsert(**kwargs)
+        second = store.upsert(**kwargs)
         (count,) = db.writer.execute("SELECT COUNT(*) FROM legacy_outages").fetchone()
         assert count == 1
+        # CLI-02 (qa-report-data-01.md): the caller needs to tell a real
+        # insert apart from a no-op re-import to report "inserted" vs
+        # "already present" counts, instead of always claiming N
+        # "imported" even when nothing actually changed.
+        assert first is True
+        assert second is False
     finally:
         db.close()
 
@@ -69,7 +75,7 @@ def test_reimporting_closes_a_previously_open_event(tmp_path: Path) -> None:
         second_import_id = ImportRunStore(db.writer).start(
             device_id, started_at=2, source_tz="America/Tegucigalpa"
         )
-        store.upsert(
+        closed = store.upsert(
             device_id=device_id,
             start_ts=1_000,
             end_ts=1_200,
@@ -89,6 +95,10 @@ def test_reimporting_closes_a_previously_open_event(tmp_path: Path) -> None:
         assert row.logged_minutes == 3
         (count,) = db.writer.execute("SELECT COUNT(*) FROM legacy_outages").fetchone()
         assert count == 1
+        # CLI-02: closing a previously-open event is a real change, not
+        # a no-op -- it must still count as "inserted" progress, not
+        # "already present".
+        assert closed is True
     finally:
         db.close()
 
@@ -99,7 +109,7 @@ def test_reimporting_an_already_closed_event_changes_nothing(tmp_path: Path) -> 
     update closes an open event, nothing else."""
     store, db, device_id, import_id = _store(tmp_path)
     try:
-        store.upsert(
+        first = store.upsert(
             device_id=device_id,
             start_ts=1_000,
             end_ts=1_200,
@@ -112,7 +122,7 @@ def test_reimporting_an_already_closed_event_changes_nothing(tmp_path: Path) -> 
             flags=frozenset(),
             import_id=import_id,
         )
-        store.upsert(
+        second = store.upsert(
             device_id=device_id,
             start_ts=1_000,
             end_ts=9_999,
@@ -130,5 +140,65 @@ def test_reimporting_an_already_closed_event_changes_nothing(tmp_path: Path) -> 
         assert row.end_ts == 1_200
         assert row.soc_end == 80
         assert row.logged_minutes == 3
+        # CLI-02: a true no-op re-import of an already-closed event
+        # must report as "already present", never as a fresh insert.
+        assert first is True
+        assert second is False
+    finally:
+        db.close()
+
+
+def test_between_returns_entries_overlapping_the_range(tmp_path: Path) -> None:
+    """DATA-02 (qa-report-data-01.md): reconciliation needs "every
+    legacy entry overlapping a range", not `get()`'s exact-start
+    lookup -- `web.routes.api._reconcile`'s own docstring named this
+    gap explicitly before this fix. Mirrors `OutageStore.events`/
+    `gaps`'s overlap-range SQL, including an open-ended (`end_ts is
+    None`) entry still being "overlapping" at any later instant."""
+    store, db, device_id, import_id = _store(tmp_path)
+    try:
+        store.upsert(
+            device_id=device_id,
+            start_ts=1_000,
+            end_ts=1_200,
+            soc_start=90,
+            soc_end=80,
+            logged_minutes=3,
+            start_line="L1",
+            end_line="L2",
+            source_tz="America/Tegucigalpa",
+            flags=frozenset(),
+            import_id=import_id,
+        )
+        store.upsert(
+            device_id=device_id,
+            start_ts=5_000,
+            end_ts=None,
+            soc_start=50,
+            soc_end=None,
+            logged_minutes=None,
+            start_line="L3",
+            end_line=None,
+            source_tz="America/Tegucigalpa",
+            flags=frozenset(),
+            import_id=import_id,
+        )
+        store.upsert(
+            device_id=device_id,
+            start_ts=50_000,
+            end_ts=50_100,
+            soc_start=40,
+            soc_end=35,
+            logged_minutes=2,
+            start_line="L5",
+            end_line="L6",
+            source_tz="America/Tegucigalpa",
+            flags=frozenset(),
+            import_id=import_id,
+        )
+
+        found = store.between(device_id, 900, 6_000)
+
+        assert [entry.start_ts for entry in found] == [1_000, 5_000]
     finally:
         db.close()

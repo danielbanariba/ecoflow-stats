@@ -408,6 +408,17 @@ def build_battery_dod_row(event: Event) -> BatteryDodRow:
     )
 
 
+_AUTONOMY_HOURS_DECIMALS = 1
+"""Both hours columns are division results (SoC points / an hourly
+discharge rate; minutes / 60) and essentially never land on a round
+number -- displaying the raw float leaked binary noise like
+`6.083333333333333h` instead of a clean `6.1h` (visual-QA batch fix01,
+fix 2). Rounded here, once, for both columns, rather than in the i18n
+template string -- `battery.autonomy.hours_value` stays a plain
+`"{hours}h"` with no decimal spec, matching how every other formatted
+number in this template set is already a plain value substitution."""
+
+
 def build_battery_autonomy_row(event: Event) -> BatteryAutonomyRow:
     """One outage's observed-autonomy row, reusing
     `battery.service.observed_autonomy` directly -- the view layer
@@ -419,12 +430,14 @@ def build_battery_autonomy_row(event: Event) -> BatteryAutonomyRow:
             start_ts=event.start_ts, end_ts=event.end_ts, observed_h=None, device_estimate_h=None
         )
     device_estimate_h = (
-        None if result.device_estimate_h == "unavailable" else result.device_estimate_h
+        None
+        if result.device_estimate_h == "unavailable"
+        else round(result.device_estimate_h, _AUTONOMY_HOURS_DECIMALS)
     )
     return BatteryAutonomyRow(
         start_ts=event.start_ts,
         end_ts=event.end_ts,
-        observed_h=result.observed_h,
+        observed_h=round(result.observed_h, _AUTONOMY_HOURS_DECIMALS),
         device_estimate_h=device_estimate_h,
     )
 

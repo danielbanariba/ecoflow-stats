@@ -225,6 +225,42 @@ def test_the_autonomy_table_shows_the_comparison_unavailable_and_not_enough_data
         application.database.close()
 
 
+def test_the_autonomy_table_rounds_both_hours_columns_to_one_decimal_place(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Visual-QA batch fix01, fix 2: both hours columns are division
+    results that essentially never land on a round number -- a defect
+    that rendered the raw float would show `6.083333333333333h` /
+    `6.666666666666667h` instead of a clean `6.1h` / `6.7h`. Pass-1: a
+    user comparing observed autonomy against the device's own estimate
+    cannot read 15 significant digits as a glance-able number."""
+    start = _RANGE_START + 1_000
+    application, _device_id, client = _client(
+        monkeypatch,
+        tmp_path,
+        events=[
+            _event(
+                start,
+                start + 3_600,  # 1h duration
+                soc_start=73,
+                soc_min=61,  # drop=12 -> observed_h = 73 / (12 / 1h) = 73/12 = 6.0833...
+                dsg_remain_min_start=400,  # device_estimate_h = 400/60 = 6.6666...
+            ),
+        ],
+    )
+    try:
+        with client:
+            response = client.get("/battery")
+
+        html = response.text
+        assert "6.1h" in html
+        assert "6.7h" in html
+        assert "6.083333333333333h" not in html
+        assert "6.666666666666667h" not in html
+    finally:
+        application.database.close()
+
+
 def test_the_trend_table_renders_rollup_rows_in_day_order(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

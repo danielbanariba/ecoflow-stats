@@ -147,3 +147,37 @@ def test_the_default_derive_job_is_started_with_the_applications_own_devices_and
     assert captured["database"] is application.database
     assert captured["clock"] is application.clock
     application.database.close()
+
+
+def test_the_default_collector_is_started_with_the_applications_own_live_state_and_notifier(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Without this, the real collector would run with no live detector
+    state and no notification service even when one was built -- every
+    below-threshold reading would be judged against a fresh, empty
+    window every tick instead of the application's own replayed state,
+    and no live transition would ever reach a notifier."""
+    monkeypatch.setenv("ECOFLOW_STATS_NTFY_TOPIC", "test-topic")
+    application = _application(monkeypatch, tmp_path)
+    captured: dict[str, object] = {}
+
+    async def _fake_run_forever(devices: object, **kwargs: object) -> None:
+        # `.get(...)`, never `[...]`, so a not-yet-wired kwarg is captured
+        # as `None` instead of raising -- an exception here would retry
+        # in a tight loop against this test's `FakeClock` (whose
+        # `sleep_until` never really waits), hanging the test instead of
+        # failing it cleanly.
+        captured["live_states"] = kwargs.get("live_states")
+        captured["notification_service"] = kwargs.get("notification_service")
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(web_app, "run_forever", _fake_run_forever)
+
+    app = create_app(application, start_derive_job=_never_ticks)
+
+    with TestClient(app):
+        pass
+
+    assert captured["live_states"] is application.live_outage_states
+    assert captured["notification_service"] is application.notification_service
+    application.database.close()

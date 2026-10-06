@@ -44,6 +44,12 @@ def _start_collector(application: Application) -> SupervisedTaskHandle:
             poll_interval_s=application.settings.poll_interval,
             poll_offset_s=application.settings.poll_offset,
             derivation_store=application.derivation_store,
+            live_states=application.live_outage_states,
+            notification_service=application.notification_service,
+            detector_config=DetectorConfig(
+                threshold_v=application.settings.outage_threshold_v,
+                gap_threshold_s=application.settings.gap_threshold,
+            ),
         )
 
     supervised = SupervisedTask(name="collector", target=_run, clock=application.clock)

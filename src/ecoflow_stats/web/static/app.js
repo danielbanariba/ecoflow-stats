@@ -224,6 +224,18 @@ function chartGradient(colorTop, colorBottom) {
   ]);
 }
 
+// A Wh-to-kWh (or similar) division on a float counter almost never
+// lands on a round number -- without this, the energy/grid chart
+// tooltips leaked binary noise like "5.494109999999986" instead of a
+// clean "5.49" (the same class of defect `views.py`'s own
+// `_AUTONOMY_HOURS_DECIMALS` rounds away server-side for the battery
+// autonomy table, visual-QA batch fix01 fix 2). `null`/`undefined`
+// pass through unrounded so a chart's own `connectNulls: false` still
+// sees a real gap, never a fabricated `0`.
+function round2(value) {
+  return value === null || value === undefined ? value : Math.round(value * 100) / 100;
+}
+
 function readChartJsonData(el) {
   const targetId = el.dataset.json;
   if (!targetId) {
@@ -566,10 +578,12 @@ function initEnergyBarChart(el) {
     .then((response) => response.json())
     .then((body) => {
       const periods = body.periods.map((period) => period.period);
-      const energyIn = body.periods.map(
-        (period) => (period.chg_ac_wh + period.chg_dc_wh + period.chg_solar_wh) / 1000,
+      const energyIn = body.periods.map((period) =>
+        round2((period.chg_ac_wh + period.chg_dc_wh + period.chg_solar_wh) / 1000),
       );
-      const energyOut = body.periods.map((period) => (period.dsg_ac_wh + period.dsg_dc_wh) / 1000);
+      const energyOut = body.periods.map((period) =>
+        round2((period.dsg_ac_wh + period.dsg_dc_wh) / 1000),
+      );
       const chart = window.echarts.init(el, null, { renderer: "svg" });
       chart.setOption({
         animation: !prefersReducedMotion(),
@@ -631,8 +645,8 @@ function initGridSeriesChart(el) {
   fetch(src)
     .then((response) => response.json())
     .then((body) => {
-      const voltage = body.points.map((point) => [point.ts * 1000, point.grid_v_avg]);
-      const frequency = body.points.map((point) => [point.ts * 1000, point.grid_hz_avg]);
+      const voltage = body.points.map((point) => [point.ts * 1000, round2(point.grid_v_avg)]);
+      const frequency = body.points.map((point) => [point.ts * 1000, round2(point.grid_hz_avg)]);
       const chart = window.echarts.init(el, null, { renderer: "svg" });
       chart.setOption({
         animation: !prefersReducedMotion(),

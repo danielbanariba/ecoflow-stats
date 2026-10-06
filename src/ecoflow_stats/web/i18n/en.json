@@ -88,6 +88,7 @@
   "outages.state.unknown": "Unknown",
   "chart.fallback_label": "View as table",
   "battery.page.title": "Battery",
+  "battery.now.heading": "Right now",
   "battery.chart.soc.heading": "Charge",
   "battery.chart.soc.aria_label": "State of charge over time",
   "battery.series.table.start": "Time",

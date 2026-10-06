@@ -394,6 +394,18 @@ class BatteryViewModel:
     trend_rows: tuple[BatteryTrendRow, ...]
     series_src: str
     trends_src: str
+    current_soc: int | None
+    """The "right now" snapshot the redesigned page's activity ring
+    shows (presentation-only: the most recent already-fetched
+    `charge_series` point's charge, never a new query) -- `None` when
+    the range has no sample at all, rendered as "unavailable" rather
+    than a fabricated 0%."""
+    current_soh: float | None
+    """Same snapshot derivation as `current_soc`, from the most recent
+    already-fetched `trend_rows` day."""
+    current_cycles: int | None
+    """Same snapshot derivation as `current_soc`, from the most recent
+    already-fetched `trend_rows` day."""
 
 
 def build_battery_dod_row(event: Event) -> BatteryDodRow:
@@ -464,6 +476,7 @@ def build_battery_view_model(
     ordered_events = sorted(outage_events, key=lambda event: event.start_ts, reverse=True)
     charge_points = charge_history(samples)
     trend = battery_trend(trend_days)
+    latest_trend_day = trend[-1] if trend else None
     return BatteryViewModel(
         devices=build_device_options(device_records, selected_device_id=selected_device_id),
         selected_device_id=selected_device_id,
@@ -480,6 +493,9 @@ def build_battery_view_model(
         ),
         series_src=series_src,
         trends_src=trends_src,
+        current_soc=charge_points[-1].soc if charge_points else None,
+        current_soh=latest_trend_day.soh_last if latest_trend_day is not None else None,
+        current_cycles=latest_trend_day.cycles_last if latest_trend_day is not None else None,
     )
 
 

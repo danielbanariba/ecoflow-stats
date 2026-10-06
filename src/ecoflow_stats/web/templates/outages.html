@@ -2,40 +2,49 @@
 {% import "_macros.html" as macros %}
 {% block title %}{{ t('outages.page.title') }} · {{ t('app.name') }}{% endblock %}
 {% block content %}
-<h1>{{ t('outages.page.title') }}</h1>
+<div class="page-head reveal">
+  <p class="eyebrow page-head__eyebrow">{{ t('outages.page.title') }}</p>
+  <h1 class="page-head__title">{{ t('outages.page.title') }}</h1>
+</div>
 
-<section class="device-selector-section" aria-label="{{ t('device.selector.label') }}">
+<section class="device-selector-section reveal" aria-label="{{ t('device.selector.label') }}">
   {{ macros.device_selector(view.devices, t, action='/outages') }}
 </section>
 
 <section class="outages-summary-section" aria-label="{{ t('outages.summary.heading') }}">
-  <h2>{{ t('outages.summary.heading') }}</h2>
-  <dl class="outages-summary">
-    <div class="outages-summary__item">
+  <h2 class="reveal">{{ t('outages.summary.heading') }}</h2>
+  {#
+    `dt`/`dd` stay bare (no class, no extra wrapping tag) -- a contract
+    test locates each figure by an exact `<dt>label</dt><dd>value</dd>`
+    pair (`test_outages_page.py::_dd_value`); the `.stat-card` div
+    around each pair carries the visual card styling instead.
+  #}
+  <dl class="stat-grid mt-6">
+    <div class="stat-card reveal">
       <dt>{{ t('outages.summary.count_label') }}</dt>
       <dd>{{ view.summary.count }}</dd>
     </div>
-    <div class="outages-summary__item">
+    <div class="stat-card reveal">
       <dt>{{ t('outages.summary.total_label') }}</dt>
       <dd>{{ t('outages.summary.seconds_value').format(seconds=view.summary.total_downtime_s) }}</dd>
     </div>
-    <div class="outages-summary__item">
+    <div class="stat-card reveal">
       <dt>{{ t('outages.summary.longest_label') }}</dt>
       <dd>
         {% if view.summary.longest_s is not none %}{{ t('outages.summary.seconds_value').format(seconds=view.summary.longest_s) }}{% else %}{{ t('common.unavailable') }}{% endif %}
       </dd>
     </div>
-    <div class="outages-summary__item">
+    <div class="stat-card reveal">
       <dt>{{ t('outages.summary.mean_label') }}</dt>
       <dd>
         {% if view.summary.mean_s is not none %}{{ t('outages.summary.seconds_value').format(seconds=view.summary.mean_s) }}{% else %}{{ t('common.unavailable') }}{% endif %}
       </dd>
     </div>
-    <div class="outages-summary__item">
+    <div class="stat-card reveal">
       <dt>{{ t('outages.summary.brief_count_label') }}</dt>
       <dd>{{ view.summary.brief_count }}</dd>
     </div>
-    <div class="outages-summary__item">
+    <div class="stat-card reveal">
       <dt>{{ t('outages.summary.unknown_time_label') }}</dt>
       <dd>{{ t('outages.summary.seconds_value').format(seconds=view.summary.unknown_time_s) }}</dd>
     </div>
@@ -43,84 +52,94 @@
 </section>
 
 <section class="outages-heatmap-section" aria-label="{{ t('outages.heatmap.heading') }}">
-  <h2>{{ t('outages.heatmap.heading') }}</h2>
-  {% call macros.chart_with_fallback('heatmap-chart', 'heatmap', t('outages.heatmap.aria_label'), t('chart.fallback_label'), json_target='heatmap-data') %}
-    <h3>{{ t('outages.heatmap.fallback.hour_heading') }}</h3>
-    <table>
-      <thead>
-        <tr>
-          <th scope="col">{{ t('outages.heatmap.table.hour') }}</th>
-          <th scope="col">{{ t('outages.heatmap.table.count') }}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for hour in range(24) %}
-        <tr>
-          <td>{{ hour }}</td>
-          <td>{{ view.heatmap.hour_of_day[hour] }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    <h3>{{ t('outages.heatmap.fallback.weekday_heading') }}</h3>
-    <table>
-      <thead>
-        <tr>
-          <th scope="col">{{ t('outages.heatmap.table.weekday') }}</th>
-          <th scope="col">{{ t('outages.heatmap.table.count') }}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for day in range(7) %}
-        <tr>
-          <td>{{ t('weekday.' ~ day) }}</td>
-          <td>{{ view.heatmap.day_of_week[day] }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  {% endcall %}
-  <script type="application/json" id="heatmap-data">{{ {"hour_of_day": view.heatmap.hour_of_day, "day_of_week": view.heatmap.day_of_week} | tojson }}</script>
+  <h2 class="reveal">{{ t('outages.heatmap.heading') }}</h2>
+  <div class="chart-card reveal mt-6">
+    <div class="chart-card__head">
+      <p class="text-muted text-caption">{{ t('outages.heatmap.aria_label') }}</p>
+      <div class="legend-row">
+        <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--unknown"></span>{{ t('outages.heatmap.table.count') }}</span>
+      </div>
+    </div>
+    {% call macros.chart_with_fallback('heatmap-chart', 'heatmap', t('outages.heatmap.aria_label'), t('chart.fallback_label'), json_target='heatmap-data', extra_class='chart--strip') %}
+      <h3>{{ t('outages.heatmap.fallback.hour_heading') }}</h3>
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">{{ t('outages.heatmap.table.hour') }}</th>
+            <th scope="col">{{ t('outages.heatmap.table.count') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for hour in range(24) %}
+          <tr>
+            <td>{{ hour }}</td>
+            <td>{{ view.heatmap.hour_of_day[hour] }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <h3>{{ t('outages.heatmap.fallback.weekday_heading') }}</h3>
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">{{ t('outages.heatmap.table.weekday') }}</th>
+            <th scope="col">{{ t('outages.heatmap.table.count') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for day in range(7) %}
+          <tr>
+            <td>{{ t('weekday.' ~ day) }}</td>
+            <td>{{ view.heatmap.day_of_week[day] }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+    <script type="application/json" id="heatmap-data">{{ {"hour_of_day": view.heatmap.hour_of_day, "day_of_week": view.heatmap.day_of_week} | tojson }}</script>
+  </div>
 </section>
 
 <section class="outages-events-section" aria-label="{{ t('outages.events.heading') }}">
-  <h2>{{ t('outages.events.heading') }}</h2>
+  <h2 class="reveal">{{ t('outages.events.heading') }}</h2>
   {% if view.events %}
-  <table>
-    <thead>
-      <tr>
-        <th scope="col">{{ t('outages.events.table.start') }}</th>
-        <th scope="col">{{ t('outages.events.table.end') }}</th>
-        <th scope="col">{{ t('outages.events.table.uncertainty') }}</th>
-        <th scope="col">{{ t('outages.events.table.source') }}</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for row in view.events %}
-      <tr>
-        <td>{{ format_local_dt(row.start_ts, tz) }}</td>
-        <td>{% if row.end_ts is not none %}{{ format_local_dt(row.end_ts, tz) }}{% else %}{{ t('outages.table.ongoing') }}{% endif %}</td>
-        <td>
-          {% if row.start_uncertain %}<span class="badge badge--uncertain">{{ t('outages.uncertain.start') }}</span>{% endif %}
-          {% if row.end_uncertain %}<span class="badge badge--uncertain">{{ t('outages.uncertain.end') }}</span>{% endif %}
-          {% if not row.start_uncertain and not row.end_uncertain %}{{ t('outages.uncertain.none') }}{% endif %}
-        </td>
-        <td>{{ t('outages.source.' ~ row.source) }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="table-scroll reveal mt-6">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">{{ t('outages.events.table.start') }}</th>
+          <th scope="col">{{ t('outages.events.table.end') }}</th>
+          <th scope="col">{{ t('outages.events.table.uncertainty') }}</th>
+          <th scope="col">{{ t('outages.events.table.source') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in view.events %}
+        <tr>
+          <td>{{ format_local_dt(row.start_ts, tz) }}</td>
+          <td>{% if row.end_ts is not none %}{{ format_local_dt(row.end_ts, tz) }}{% else %}{{ t('outages.table.ongoing') }}{% endif %}</td>
+          <td>
+            {% if row.start_uncertain %}<span class="badge badge--uncertain">{{ t('outages.uncertain.start') }}</span>{% endif %}
+            {% if row.end_uncertain %}<span class="badge badge--uncertain">{{ t('outages.uncertain.end') }}</span>{% endif %}
+            {% if not row.start_uncertain and not row.end_uncertain %}{{ t('outages.uncertain.none') }}{% endif %}
+          </td>
+          <td>{{ t('outages.source.' ~ row.source) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
   {% else %}
-  <p>{{ t('outages.events.empty') }}</p>
+  <p class="reveal mt-6 text-muted">{{ t('outages.events.empty') }}</p>
   {% endif %}
 </section>
 
 <section class="outages-gap-review-section" aria-label="{{ t('outages.gap_review.heading') }}">
-  <h2>{{ t('outages.gap_review.heading') }}</h2>
-  <p>{{ t('outages.gap_review.count', count=view.gap_review_count).format(count=view.gap_review_count) }}</p>
+  <h2 class="reveal">{{ t('outages.gap_review.heading') }}</h2>
+  <p class="reveal mt-6 text-muted">{{ t('outages.gap_review.count', count=view.gap_review_count).format(count=view.gap_review_count) }}</p>
   <button
     type="button"
-    class="gap-review-expand"
+    class="btn btn--ghost gap-review-expand reveal"
     hx-get="/outages/gaps?device={{ view.selected_device_id }}&from={{ view.range_start }}&to={{ view.range_end }}"
     hx-target="#gap-review-list"
     hx-swap="innerHTML"
@@ -129,27 +148,37 @@
 </section>
 
 <section class="outages-mains-strip-section" aria-label="{{ t('outages.mains_strip.heading') }}">
-  <h2>{{ t('outages.mains_strip.heading') }}</h2>
-  {% call macros.chart_with_fallback('mains-strip-chart', 'mains-strip', t('outages.mains_strip.aria_label'), t('chart.fallback_label'), src=view.mains_strip_src) %}
-    <table>
-      <thead>
-        <tr>
-          <th scope="col">{{ t('outages.mains_strip.table.start') }}</th>
-          <th scope="col">{{ t('outages.mains_strip.table.end') }}</th>
-          <th scope="col">{{ t('outages.mains_strip.table.state') }}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for seg in view.mains_strip %}
-        <tr>
-          <td>{{ format_local_dt(seg.start_ts, tz) }}</td>
-          <td>{{ format_local_dt(seg.end_ts, tz) }}</td>
-          <td>{{ t('outages.state.' ~ seg.state) }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  {% endcall %}
+  <h2 class="reveal">{{ t('outages.mains_strip.heading') }}</h2>
+  <div class="chart-card reveal mt-6">
+    <div class="chart-card__head">
+      <p class="text-muted text-caption">{{ t('outages.mains_strip.aria_label') }}</p>
+      <div class="legend-row">
+        <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--present"></span>{{ t('outages.state.present') }}</span>
+        <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--unknown"></span>{{ t('outages.state.unknown') }}</span>
+        <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--outage"></span>{{ t('outages.state.absent') }}</span>
+      </div>
+    </div>
+    {% call macros.chart_with_fallback('mains-strip-chart', 'mains-strip', t('outages.mains_strip.aria_label'), t('chart.fallback_label'), src=view.mains_strip_src, extra_class='chart--strip') %}
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">{{ t('outages.mains_strip.table.start') }}</th>
+            <th scope="col">{{ t('outages.mains_strip.table.end') }}</th>
+            <th scope="col">{{ t('outages.mains_strip.table.state') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for seg in view.mains_strip %}
+          <tr>
+            <td>{{ format_local_dt(seg.start_ts, tz) }}</td>
+            <td>{{ format_local_dt(seg.end_ts, tz) }}</td>
+            <td>{{ t('outages.state.' ~ seg.state) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+  </div>
 </section>
 
 <script src="/static/vendor/echarts.min.js" defer></script>

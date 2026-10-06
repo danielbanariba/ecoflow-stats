@@ -88,6 +88,7 @@
   "outages.state.unknown": "Desconocido",
   "chart.fallback_label": "Ver como tabla",
   "battery.page.title": "Batería",
+  "battery.now.heading": "Ahora",
   "battery.chart.soc.heading": "Carga",
   "battery.chart.soc.aria_label": "Carga de la batería a lo largo del tiempo",
   "battery.series.table.start": "Hora",

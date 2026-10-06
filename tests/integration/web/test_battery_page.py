@@ -266,6 +266,39 @@ def test_the_autonomy_table_rounds_both_hours_columns_to_one_decimal_place(
         application.database.close()
 
 
+def test_the_right_now_tiles_show_the_latest_charge_soh_and_cycles(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """redesign01 added a "right now" section above the historical
+    charts, built from the LAST sample and the LAST rollup row rather
+    than a new metric. Pass-1: a defect that picked the wrong row (the
+    first sample instead of the latest, or an earlier rollup day)
+    would show a stale or wrong battery condition on the one tile
+    meant to answer "what is my battery doing right now"."""
+    samples = [
+        (_RANGE_START + 100, Reading(soc=95)),
+        (_RANGE_START + 300, Reading(soc=62)),
+    ]
+    application, _device_id, client = _client(
+        monkeypatch,
+        tmp_path,
+        samples=samples,
+        rollups=[
+            _rollup_row("2026-01-04", cycles_last=10, soh_last=98.0),
+            _rollup_row("2026-01-05", cycles_last=15, soh_last=95.5),
+        ],
+    )
+    try:
+        with client:
+            html = client.get("/battery").text
+
+        assert 'class="ring-center__value num">62%</span>' in html
+        assert '<span class="num">95.5%</span>' in html
+        assert '<span class="num">15</span>' in html
+    finally:
+        application.database.close()
+
+
 def test_the_trend_table_renders_rollup_rows_in_day_order(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

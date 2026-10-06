@@ -143,6 +143,36 @@ def test_a_newly_configured_device_with_no_sample_shows_an_explicit_empty_state(
         application.database.close()
 
 
+def test_the_spanish_empty_state_uses_a_neutral_usted_register_not_voseo(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """es.json neutral Spanish register normalization: every other
+    Spanish string in the catalog addresses the reader as "usted" (for
+    example "Vuelva a intentarlo", "Verifique su conexión") -- this
+    was the one string still using Argentine voseo ("Volvé a
+    revisar"), an inconsistent regional register nowhere else in the
+    app. Pass-2: reverting the string back to "Volvé a revisar
+    después del próximo sondeo programado." turns this red."""
+    application = _build(monkeypatch, tmp_path, devices="TESTDEV0001")
+    try:
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
+
+        with TestClient(app) as client:
+            client.cookies.set("lang", "es")
+            response = client.get("/")
+
+        html = response.text
+        assert "Vuelva a revisar" in html
+        assert "Volvé" not in html
+    finally:
+        application.database.close()
+
+
 def test_a_stale_sample_shows_an_explicit_stale_indicator_with_the_data_age(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -31,7 +31,7 @@
   "live.battery_power.remaining_discharging": "{minutes} min restantes",
   "live.stale": "Desactualizado: no es el dato actual",
   "live.empty_state.title": "Todavía no hay datos",
-  "live.empty_state.body": "Este dispositivo todavía no reportó ninguna lectura. Volvé a revisar después del próximo sondeo programado.",
+  "live.empty_state.body": "Este dispositivo todavía no reportó ninguna lectura. Vuelva a revisar después del próximo sondeo programado.",
   "time.seconds_ago.one": "hace {count} s",
   "time.seconds_ago.other": "hace {count} s",
   "time.minutes_ago.one": "hace {count} min",

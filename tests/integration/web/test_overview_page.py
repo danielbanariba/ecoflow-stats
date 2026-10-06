@@ -146,6 +146,30 @@ def test_a_stale_sample_shows_an_explicit_stale_indicator_with_the_data_age(
         application.database.close()
 
 
+def test_primary_navigation_links_to_outages_and_battery_but_not_unbuilt_pages(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Visual-QA batch fix01, fix 3: `base.html`'s `<nav>` only linked
+    to Overview, leaving the already-shipped Outages and Battery pages
+    undiscoverable without typing a URL by hand. Energy and Grid have
+    no routes yet (slices 29/30), so a defect that linked them too
+    would send a visitor to a 404."""
+    application = _build(monkeypatch, tmp_path, devices="TESTDEV0001")
+    try:
+        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+
+        with TestClient(app) as client:
+            response = client.get("/")
+
+        html = response.text
+        assert '<a href="/outages">' in html
+        assert '<a href="/battery">' in html
+        assert '<a href="/energy">' not in html
+        assert '<a href="/grid">' not in html
+    finally:
+        application.database.close()
+
+
 def test_the_device_choice_persists_via_cookie_across_a_second_request(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

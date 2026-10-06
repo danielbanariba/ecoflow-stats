@@ -290,11 +290,56 @@ def decided_gaps(
     return paired
 
 
+def unresolved_legacy(
+    legacy: Sequence[LegacyOutageLike], decisions: Sequence[Decision]
+) -> list[LegacyOutageLike]:
+    """Every suspected-phantom legacy entry with no active decision yet
+    -- the review queue the legacy decide/undo routes (`web.routes.
+    actions.decide_legacy`/`undo`) already had, with no UI entry point
+    reaching them until now (UI-11, qa-report-ui-01.md). Only a
+    suspected-phantom entry is genuinely ambiguous: `resolve()` already
+    counts every other legacy entry automatically, so nothing else
+    needs a human verdict here -- unlike `unresolved_gaps`, which lists
+    every gap regardless of any flag. A legacy entry's own end
+    (`_closed_end(entry.end_ts, entry.start_ts)`) is never substituted
+    with an external `range_end` the way a gap's open end is, because
+    `resolve()` itself never does that for a legacy entry either."""
+    return [
+        entry
+        for entry in legacy
+        if "suspected_phantom" in entry.flags
+        and _best_decision(
+            decisions, "legacy", entry.start_ts, _closed_end(entry.end_ts, entry.start_ts)
+        )
+        is None
+    ]
+
+
+def decided_legacy(
+    legacy: Sequence[LegacyOutageLike], decisions: Sequence[Decision]
+) -> list[tuple[LegacyOutageLike, Decision]]:
+    """Every legacy entry WITH an active decision, paired with it -- the
+    exact inverse of `unresolved_legacy` above, so a decided entry stays
+    visible with its own undo form after a reload, mirroring
+    `decided_gaps` exactly (UI-11, same "disappears after deciding"
+    defect UI-12 already fixed for gaps, now fixed for legacy too)."""
+    paired: list[tuple[LegacyOutageLike, Decision]] = []
+    for entry in legacy:
+        decision = _best_decision(
+            decisions, "legacy", entry.start_ts, _closed_end(entry.end_ts, entry.start_ts)
+        )
+        if decision is not None:
+            paired.append((entry, decision))
+    return paired
+
+
 __all__ = [
     "EffectiveOutage",
     "EffectiveView",
     "LegacyStatus",
     "decided_gaps",
+    "decided_legacy",
     "resolve",
     "unresolved_gaps",
+    "unresolved_legacy",
 ]

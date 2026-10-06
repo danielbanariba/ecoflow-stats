@@ -148,6 +148,20 @@
   <div id="gap-review-list" class="gap-review-list" aria-live="polite"></div>
 </section>
 
+<section class="outages-legacy-review-section reveal" aria-label="{{ t('outages.legacy_review.heading') }}">
+  <h2 class="reveal">{{ t('outages.legacy_review.heading') }}</h2>
+  <p class="reveal mt-6 text-muted">{{ t('outages.legacy_review.intro') }}</p>
+  <p class="reveal text-muted">{{ t('outages.legacy_review.count', count=view.legacy_review_count).format(count=view.legacy_review_count) }}</p>
+  <button
+    type="button"
+    class="btn btn--ghost legacy-review-expand reveal"
+    hx-get="/outages/legacy?device={{ view.selected_device_id }}&from={{ view.range_start }}&to={{ view.range_end }}"
+    hx-target="#legacy-review-list"
+    hx-swap="innerHTML"
+  >{{ t('outages.legacy_review.expand_label') }}</button>
+  <div id="legacy-review-list" class="gap-review-list" aria-live="polite"></div>
+</section>
+
 <section class="outages-mains-strip-section" aria-label="{{ t('outages.mains_strip.heading') }}">
   <h2 class="reveal">{{ t('outages.mains_strip.heading') }}</h2>
   <div class="chart-card reveal mt-6">

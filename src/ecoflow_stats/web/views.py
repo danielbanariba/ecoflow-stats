@@ -202,6 +202,12 @@ class OutagesViewModel:
     heatmap: HeatmapViewModel
     events: tuple[OutageEventRow, ...]
     gap_review_count: int
+    legacy_review_count: int
+    """How many imported legacy outages are suspected phantoms still
+    awaiting a human verdict (UI-11, qa-report-ui-01.md) -- the same
+    role `gap_review_count` plays for gaps, surfaced so the page's
+    legacy-review section can show a count before the list is
+    expanded."""
     mains_strip: tuple[MainsStripSegment, ...]
     mains_strip_src: str
 
@@ -350,6 +356,7 @@ def build_outages_view_model(
     briefs: Sequence[EffectiveOutage],
     gaps: Sequence[Gap],
     gap_review_count: int,
+    legacy_review_count: int,
     range_start: int,
     range_end: int,
     mains_strip_src: str,
@@ -371,6 +378,7 @@ def build_outages_view_model(
         ),
         events=build_outage_event_rows(outages),
         gap_review_count=gap_review_count,
+        legacy_review_count=legacy_review_count,
         mains_strip=build_mains_strip_segments(
             outages=outages, gaps=gaps, range_start=range_start, range_end=range_end
         ),

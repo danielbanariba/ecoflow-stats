@@ -26,7 +26,12 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from ecoflow_stats.outages.resolve import decided_gaps, unresolved_gaps
+from ecoflow_stats.outages.resolve import (
+    decided_gaps,
+    decided_legacy,
+    unresolved_gaps,
+    unresolved_legacy,
+)
 from ecoflow_stats.outages.service import record_decision, undo_decision
 from ecoflow_stats.storage.legacy import LegacyStore
 from ecoflow_stats.web.deps import LANG_COOKIE, negotiate_request_lang
@@ -214,6 +219,57 @@ def gap_review_list(
     return response
 
 
+@router.get("/outages/legacy", response_class=HTMLResponse)
+def legacy_review_list(
+    request: Request,
+    device: int | None = None,
+    start: int | None = Query(None, alias="from"),
+    end: int | None = Query(None, alias="to"),
+) -> HTMLResponse:
+    """UI-11 (qa-report-ui-01.md): the HTMX fragment `outages.html`'s
+    legacy-review section expands into -- the decide (`decide_legacy`)
+    and undo routes already existed with no UI entry point reaching
+    them at all until now. Mirrors `gap_review_list` exactly: lists
+    every still-unconfirmed suspected-phantom entry's "mark as real"
+    form AND every already-decided entry's recorded verdict with its
+    own undo form, reusing `resolve.unresolved_legacy`/`resolve.
+    decided_legacy` instead of duplicating their overlap-matching
+    rule."""
+    ctx: ApiContext = request.app.state.api
+    device_id = _resolve_device_id(ctx.device_records, device)
+    range_end = end if end is not None else int(ctx.now().timestamp())
+    range_start = start if start is not None else range_end - _DEFAULT_RANGE_S
+    legacy = _legacy_store(request).between(device_id, range_start, range_end)
+    decisions = ctx.decision_store.active(device_id) if ctx.decision_store is not None else []
+    pending = unresolved_legacy(legacy, decisions)
+    decided = decided_legacy(legacy, decisions)
+    t = _translator_for(request)
+    cookie_value, token, is_new = _csrf_context(request)
+    if not pending and not decided:
+        response = HTMLResponse(f"<p>{t('outages.legacy_review.empty')}</p>")
+    else:
+        pending_rows = (
+            _render_legacy_row(
+                entry=entry, device_id=device_id, tz=ctx.tz, t=t, decision=None, csrf_token=token
+            )
+            for entry in pending
+        )
+        decided_rows = (
+            _render_legacy_row(
+                entry=entry,
+                device_id=device_id,
+                tz=ctx.tz,
+                t=t,
+                decision={"id": decision.id, "verdict": decision.verdict},
+                csrf_token=token,
+            )
+            for entry, decision in decided
+        )
+        response = HTMLResponse("".join(pending_rows) + "".join(decided_rows))
+    _set_csrf_cookie_if_new(request, response, cookie_value, is_new)
+    return response
+
+
 @router.post("/outages/gaps/{gap_start}/decision", dependencies=[Depends(require_csrf)])
 def decide_gap(
     request: Request,
@@ -352,4 +408,11 @@ def undo(
     return response
 
 
-__all__ = ["decide_gap", "decide_legacy", "gap_review_list", "router", "undo"]
+__all__ = [
+    "decide_gap",
+    "decide_legacy",
+    "gap_review_list",
+    "legacy_review_list",
+    "router",
+    "undo",
+]

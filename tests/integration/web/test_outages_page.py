@@ -313,6 +313,64 @@ def test_the_gap_review_queue_count_excludes_an_already_decided_gap(
         application.database.close()
 
 
+def test_the_legacy_review_section_renders_with_its_expand_button_and_pending_count(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UI-11 (qa-report-ui-01.md): the legacy-review decide/undo routes
+    already existed with no UI entry point reaching them at all. Pass-1:
+    a page that never rendered this section (or never counted a
+    pending suspected-phantom entry) would leave the feature wholly
+    unreachable, exactly the defect this finding reports -- a confirmed
+    (non-pending) legacy entry must NOT inflate the count, mirroring
+    `test_the_gap_review_queue_count_excludes_an_already_decided_gap`."""
+    application, device_id, client = _client(monkeypatch, tmp_path)
+    import_id = ImportRunStore(application.database.writer).start(device_id, 1, "UTC")
+    pending_start = _RANGE_START + 2_000
+    confirmed_start = _RANGE_START + 7_000
+    legacy_store = LegacyStore(application.database.writer)
+    legacy_store.upsert(
+        device_id=device_id,
+        start_ts=pending_start,
+        end_ts=pending_start + 120,
+        soc_start=0,
+        soc_end=0,
+        logged_minutes=2,
+        start_line="corte",
+        end_line="retorno",
+        source_tz="UTC",
+        flags=frozenset({"suspected_phantom"}),
+        import_id=import_id,
+    )
+    legacy_store.upsert(
+        device_id=device_id,
+        start_ts=confirmed_start,
+        end_ts=confirmed_start + 120,
+        soc_start=0,
+        soc_end=0,
+        logged_minutes=2,
+        start_line="corte",
+        end_line="retorno",
+        source_tz="UTC",
+        flags=frozenset({"suspected_phantom"}),
+        import_id=import_id,
+    )
+    DecisionStore(application.database.writer).add(
+        _decision(device_id, "legacy", confirmed_start, confirmed_start + 120, "real")
+    )
+    application.database.writer.commit()
+    try:
+        with client:
+            response = client.get("/outages")
+
+        html = response.text
+        assert "1 legacy outage awaiting review" in html
+        assert "1 legacy outages awaiting review" not in html
+        assert 'hx-get="/outages/legacy?device=' in html
+        assert "Review legacy outages" in html
+    finally:
+        application.database.close()
+
+
 def test_every_chart_element_has_an_aria_label_and_a_details_fallback_table(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

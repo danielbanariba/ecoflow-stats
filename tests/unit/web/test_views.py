@@ -441,6 +441,7 @@ def test_build_outages_view_model_assembles_every_part_without_dropping_fields()
         briefs=[],
         gaps=[],
         gap_review_count=3,
+        legacy_review_count=5,
         range_start=_RANGE_START,
         range_end=_RANGE_END,
         mains_strip_src="/api/v1/mains-strip?device=7",
@@ -453,5 +454,6 @@ def test_build_outages_view_model_assembles_every_part_without_dropping_fields()
     assert view.heatmap.day_of_week == tuple(aggregates.day_of_week)
     assert view.events[0].start_ts == _RANGE_START + 50
     assert view.gap_review_count == 3
+    assert view.legacy_review_count == 5
     assert view.mains_strip_src == "/api/v1/mains-strip?device=7"
     assert view.mains_strip[0].start_ts == _RANGE_START

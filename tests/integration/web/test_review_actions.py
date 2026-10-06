@@ -374,6 +374,96 @@ def test_unflagging_a_suspected_phantom_shows_it_as_confirmed_real(
         application.database.close()
 
 
+def test_opening_the_legacy_review_list_shows_unresolved_and_decided_legacy_entries(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UI-11 (qa-report-ui-01.md): the legacy decide/undo routes already
+    existed with no UI entry point reaching them at all -- this proves
+    the missing `GET /outages/legacy` list route itself, mirroring
+    `test_opening_the_gap_review_list_shows_unresolved_and_decided_gaps_
+    with_their_evidence` exactly: a still-unconfirmed suspected-phantom
+    entry shows its "mark as real" form, and an entry already confirmed
+    real shows its recorded verdict and its own undo form naming the
+    real decision id -- never disappearing from the list once decided,
+    exactly like a decided gap doesn't (UI-12's same fix, extended)."""
+    unresolved_start = _RANGE_START + 2_000
+    decided_start = _RANGE_START + 8_000
+    application, device_id, client = _client(monkeypatch, tmp_path)
+    _seed_legacy_phantom(application, device_id, unresolved_start)
+    _seed_legacy_phantom(application, device_id, decided_start)
+    decision_store = DecisionStore(application.database.writer)
+    decision_id = decision_store.add(
+        Decision(
+            device_id=device_id,
+            target="legacy",
+            start_ts=decided_start,
+            end_ts=decided_start + 120,
+            verdict="real",
+            decided_at=1,
+        )
+    )
+    try:
+        with client:
+            response = client.get(f"/outages/legacy?device={device_id}")
+
+        assert response.status_code == 200
+        html = response.text
+        assert f'data-legacy-start="{unresolved_start}"' in html
+        assert "Mark as real" in html
+        assert "Suspected phantom" in html
+
+        assert f'data-legacy-start="{decided_start}"' in html
+        assert "Confirmed real" in html
+        assert f"/decisions/{decision_id}/undo" in html
+    finally:
+        application.database.close()
+
+
+def test_a_decided_legacy_entrys_undo_is_reachable_from_the_review_list_after_a_reload(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UI-11: mirrors `test_a_decided_gaps_undo_is_reachable_from_the_
+    review_list_after_a_reload` for a legacy entry -- confirms a
+    suspected phantom as real, reloads the list fresh (never reusing
+    the decide response), extracts the undo form's decision id purely
+    from that fresh HTML, and proves posting to it actually reverts the
+    entry back to its unconfirmed phantom state."""
+    legacy_start = _RANGE_START + 9_000
+    application, device_id, client = _client(monkeypatch, tmp_path)
+    _seed_legacy_phantom(application, device_id, legacy_start)
+    try:
+        with client:
+            headers = _csrf_headers(client, application)
+            client.post(
+                f"/outages/legacy/{legacy_start}/decision",
+                data={"device": device_id, "verdict": "real"},
+                headers=headers,
+            )
+
+            reload_response = client.get(f"/outages/legacy?device={device_id}")
+            reload_html = reload_response.text
+            match = re.search(r"/decisions/(\d+)/undo", reload_html)
+            assert match is not None, "no undo form for the decided legacy entry after reload"
+            decision_id = int(match.group(1))
+
+            undo_response = client.post(
+                f"/decisions/{decision_id}/undo",
+                data={
+                    "device": device_id,
+                    "target": "legacy",
+                    "start": legacy_start,
+                    "csrf_token": headers["x-csrf-token"],
+                },
+                headers=headers,
+            )
+
+        assert undo_response.status_code == 200
+        assert "Suspected phantom" in undo_response.text
+        assert DecisionStore(application.database.writer).active(device_id) == []
+    finally:
+        application.database.close()
+
+
 def test_a_decision_for_a_non_matching_gap_start_is_rejected_without_recording_anything(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

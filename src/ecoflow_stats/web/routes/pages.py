@@ -19,7 +19,7 @@ from fastapi.templating import Jinja2Templates
 from ecoflow_stats.battery.stats import DailyBatteryTrend
 from ecoflow_stats.live_status.service import get_status
 from ecoflow_stats.outages.aggregates import compute_aggregates
-from ecoflow_stats.outages.resolve import resolve, unresolved_gaps
+from ecoflow_stats.outages.resolve import resolve, unresolved_gaps, unresolved_legacy
 from ecoflow_stats.storage.legacy import LegacyStore
 from ecoflow_stats.storage.rollups import RollupStore
 from ecoflow_stats.storage.state import set_session_generation
@@ -265,6 +265,7 @@ def outages_page(
         outages=view.outages, range_start=range_start, range_end=range_end, tz=api_ctx.tz
     )
     pending_gaps = unresolved_gaps(gaps, decisions, range_end)
+    pending_legacy = unresolved_legacy(legacy, decisions)
 
     view_model = build_outages_view_model(
         device_records=ctx.device_records,
@@ -274,6 +275,7 @@ def outages_page(
         briefs=view.briefs,
         gaps=gaps,
         gap_review_count=len(pending_gaps),
+        legacy_review_count=len(pending_legacy),
         range_start=range_start,
         range_end=range_end,
         mains_strip_src=f"/api/v1/mains-strip?device={selected_id}&from={range_start}&to={range_end}",

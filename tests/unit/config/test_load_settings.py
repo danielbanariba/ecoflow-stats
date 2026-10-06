@@ -71,6 +71,7 @@ def test_devices_entry_may_name_an_explicit_adapter_id() -> None:
         ({"ECOFLOW_API_HOST": "https://evil.example.com"}, "ECOFLOW_API_HOST"),
         ({"ECOFLOW_STATS_TARIFF": "-1"}, "ECOFLOW_STATS_TARIFF"),
         ({"ECOFLOW_STATS_ALLOWED_NETWORKS": "not-a-cidr"}, "ECOFLOW_STATS_ALLOWED_NETWORKS"),
+        ({"ECOFLOW_STATS_TRUSTED_PROXIES": "not-a-cidr"}, "ECOFLOW_STATS_TRUSTED_PROXIES"),
         ({"ECOFLOW_STATS_PASSWORD": "short"}, "ECOFLOW_STATS_PASSWORD"),
         ({"ECOFLOW_STATS_SESSION_DAYS": "0"}, "ECOFLOW_STATS_SESSION_DAYS"),
         ({"ECOFLOW_STATS_LOG_LEVEL": "VERBOSE"}, "ECOFLOW_STATS_LOG_LEVEL"),
@@ -86,6 +87,28 @@ def test_an_invalid_value_is_rejected_and_named(
         load_settings(env)
 
     assert bad_variable in str(excinfo.value)
+
+
+def test_trusted_proxies_defaults_to_empty_so_proxy_headers_are_untrusted() -> None:
+    """Pass-1 (SEC-02): the default must be "trust nobody" -- an operator
+    who never configures `ECOFLOW_STATS_TRUSTED_PROXIES` must get a
+    `Settings.trusted_proxies` that disables uvicorn's proxy-header
+    trust entirely (`cli._uvicorn_run` reads this field)."""
+    settings = load_settings(VALID_ENV)
+
+    assert settings.trusted_proxies == ()
+
+
+def test_trusted_proxies_parses_a_configured_cidr_list() -> None:
+    """Pass-1 (SEC-02): an operator who does run behind a reverse proxy
+    must be able to name exactly which address(es) to trust, the same
+    validated-CIDR-list shape `ECOFLOW_STATS_ALLOWED_NETWORKS` already
+    uses."""
+    settings = load_settings(
+        dict(VALID_ENV, ECOFLOW_STATS_TRUSTED_PROXIES="172.18.0.0/16,192.168.1.5")
+    )
+
+    assert settings.trusted_proxies == ("172.18.0.0/16", "192.168.1.5")
 
 
 def test_data_dir_accepts_a_path_that_does_not_yet_exist(tmp_path) -> None:

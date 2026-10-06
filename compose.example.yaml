@@ -11,6 +11,12 @@ services:
       # host is reachable from outside the LAN, e.g. "192.168.1.10:8080:8080".
       - "8080:8080"
     env_file: .env
+    # environment:
+    #   # Only needed when this container sits behind a reverse proxy
+    #   # that sets X-Forwarded-For; uncomment and name exactly that
+    #   # proxy's address/CIDR. Unset (the default), no X-Forwarded-For
+    #   # header is trusted, regardless of who sends it.
+    #   - ECOFLOW_STATS_TRUSTED_PROXIES=172.18.0.0/16
     volumes:
       - ecoflow-stats-data:/data
       # Mount the legacy ecoflow-panel history read-only to import it once

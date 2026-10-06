@@ -100,6 +100,7 @@ class Settings:
     default_lang: str
     password: str | None
     allowed_networks: tuple[str, ...]
+    trusted_proxies: tuple[str, ...]
     session_days: int
     host: str
     port: int
@@ -319,6 +320,7 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
     if password is not None and len(password) < 8:
         loader.errors.append("ECOFLOW_STATS_PASSWORD: must be at least 8 characters")
     allowed_networks = loader.cidr_list("ECOFLOW_STATS_ALLOWED_NETWORKS", _DEFAULT_ALLOWED_NETWORKS)
+    trusted_proxies = loader.cidr_list("ECOFLOW_STATS_TRUSTED_PROXIES", "")
     session_days = loader.int_in_range("ECOFLOW_STATS_SESSION_DAYS", 30, 1, 365)
     host = loader.string("ECOFLOW_STATS_HOST", "0.0.0.0")
     port = loader.int_in_range("ECOFLOW_STATS_PORT", 8080, 1, 65535)
@@ -351,6 +353,7 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
         default_lang=default_lang,
         password=password,
         allowed_networks=allowed_networks,
+        trusted_proxies=trusted_proxies,
         session_days=session_days,
         host=host,
         port=port,

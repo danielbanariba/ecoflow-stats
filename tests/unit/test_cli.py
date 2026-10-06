@@ -72,16 +72,20 @@ def test_serve_with_valid_configuration_builds_the_app_and_serves_it(
     and return. The runner is monkeypatched so this never binds a real
     socket or blocks."""
     _set_env(monkeypatch, {**VALID_ENV, "ECOFLOW_STATS_DATA_DIR": str(tmp_path)})
-    calls: list[tuple[object, str, int]] = []
+    calls: list[tuple[object, str, int, object]] = []
     monkeypatch.setattr(
-        cli, "_uvicorn_run", lambda app, host, port: calls.append((app, host, port))
+        cli,
+        "_uvicorn_run",
+        lambda app, host, port, trusted_proxies=(): calls.append(
+            (app, host, port, trusted_proxies)
+        ),
     )
 
     exit_code = main(["serve"])
 
     assert exit_code == 0
     assert len(calls) == 1
-    _app, host, port = calls[0]
+    _app, host, port, _trusted_proxies = calls[0]
     assert (host, port) == ("0.0.0.0", 8080)
 
 
@@ -214,3 +218,68 @@ def test_system_clock_now_returns_a_timezone_aware_utc_datetime() -> None:
     assert now.tzinfo is not None
     assert now.utcoffset() is not None
     assert now.utcoffset().total_seconds() == 0
+
+
+def test_uvicorn_run_does_not_trust_proxy_headers_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pass-1 (SEC-02): the orchestrator's own repro -- a spoofed
+    `X-Forwarded-For` from a loopback-originated peer flipping the LAN
+    guard's decision -- traces back to uvicorn's own default
+    (`proxy_headers=True`, `forwarded_allow_ips="127.0.0.1"`). With no
+    `ECOFLOW_STATS_TRUSTED_PROXIES` configured, the real server runner
+    must disable proxy-header trust entirely, not rely on uvicorn's
+    trust-loopback-by-default behavior."""
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(cli.uvicorn, "run", lambda app, **kwargs: calls.append(kwargs))
+
+    cli._uvicorn_run(object(), "0.0.0.0", 8080, trusted_proxies=())
+
+    assert len(calls) == 1
+    assert calls[0]["proxy_headers"] is False
+
+
+def test_uvicorn_run_trusts_only_the_configured_proxies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pass-1 (SEC-02): when an operator explicitly opts in via
+    `ECOFLOW_STATS_TRUSTED_PROXIES`, that exact CIDR list -- and nothing
+    uvicorn would otherwise default to -- becomes uvicorn's
+    `forwarded_allow_ips`, so only a request relayed through one of
+    those addresses may override the client address the LAN guard
+    checks."""
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(cli.uvicorn, "run", lambda app, **kwargs: calls.append(kwargs))
+
+    cli._uvicorn_run(object(), "0.0.0.0", 8080, trusted_proxies=("172.18.0.0/16",))
+
+    assert len(calls) == 1
+    assert calls[0]["proxy_headers"] is True
+    assert calls[0]["forwarded_allow_ips"] == ["172.18.0.0/16"]
+
+
+def test_serve_passes_the_configured_trusted_proxies_to_the_default_runner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Proves the production wiring point, not just the injectable
+    `_uvicorn_run` helper in isolation: `_run_serve_command`'s real
+    default runner must receive this exact deployment's configured
+    `Settings.trusted_proxies` -- the same "prove the wiring, not just
+    the unit" pattern `web/app.py`'s own tests already apply to the
+    collector/derive/rollups jobs."""
+    _set_env(
+        monkeypatch,
+        {
+            **VALID_ENV,
+            "ECOFLOW_STATS_DATA_DIR": str(tmp_path),
+            "ECOFLOW_STATS_TRUSTED_PROXIES": "10.0.0.0/8",
+        },
+    )
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(cli.uvicorn, "run", lambda app, **kwargs: calls.append(kwargs))
+
+    exit_code = main(["serve"])
+
+    assert exit_code == 0
+    assert len(calls) == 1
+    assert calls[0]["forwarded_allow_ips"] == ["10.0.0.0/8"]

@@ -105,16 +105,35 @@ async def _run_check_command(
     )
 
 
-def _uvicorn_run(app: FastAPI, host: str, port: int) -> None:
+def _uvicorn_run(app: FastAPI, host: str, port: int, trusted_proxies: Sequence[str] = ()) -> None:
     """The real server runner; a thin wrapper so tests can inject a fake
-    one instead of actually binding a socket and blocking forever."""
-    uvicorn.run(app, host=host, port=port, log_config=None)
+    one instead of actually binding a socket and blocking forever.
+
+    ``trusted_proxies`` (SEC-02): uvicorn's own default
+    (``proxy_headers=True``, ``forwarded_allow_ips="127.0.0.1"``) trusts
+    an ``X-Forwarded-For`` header from any loopback-originated peer --
+    including a client reaching this loopback-bound port directly, this
+    app's own documented self-hosted deployment model -- letting it
+    override the client address ``AccessControlMiddleware``'s LAN guard
+    checks before the guard ever runs. Default to trusting no proxy at
+    all; only the operator's explicitly configured
+    ``ECOFLOW_STATS_TRUSTED_PROXIES`` enables it, scoped to exactly that
+    CIDR list.
+    """
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_config=None,
+        proxy_headers=bool(trusted_proxies),
+        forwarded_allow_ips=list(trusted_proxies) if trusted_proxies else [],
+    )
 
 
 def _run_serve_command(
     settings: Settings,
     *,
-    runner: Callable[[FastAPI, str, int], None] | None = None,
+    runner: Callable[[FastAPI, str, int, Sequence[str]], None] | None = None,
 ) -> int:
     """Build the composition root and serve it.
 
@@ -126,7 +145,7 @@ def _run_serve_command(
     application = bootstrap.build(settings)
     app = create_app(application)
     serve = runner if runner is not None else _uvicorn_run
-    serve(app, settings.host, settings.port)
+    serve(app, settings.host, settings.port, settings.trusted_proxies)
     return 0
 
 

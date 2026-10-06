@@ -78,3 +78,32 @@ def test_translator_falls_back_to_english_for_a_key_missing_in_the_requested_cat
 def test_translator_returns_the_key_itself_when_missing_from_every_catalog() -> None:
     t = translator("en", _CATALOGS)
     assert t("totally.unknown.key") == "totally.unknown.key"
+
+
+_PLURAL_CATALOGS = {
+    "en": {"gap.count.one": "{count} gap", "gap.count.other": "{count} gaps"},
+    "es": {"gap.count.one": "{count} vacío", "gap.count.other": "{count} vacíos"},
+}
+
+
+def test_translator_with_a_count_of_one_picks_the_singular_variant() -> None:
+    """Visual-QA batch fix01, fix 4: a route that always looked up the
+    plain key regardless of count rendered "1 gaps awaiting review" --
+    grammatically wrong for the one count a user is most likely to see
+    (a queue that just dropped to its last item)."""
+    t = translator("en", _PLURAL_CATALOGS)
+    assert t("gap.count", count=1) == "{count} gap"
+
+
+def test_translator_with_a_count_other_than_one_picks_the_plural_variant() -> None:
+    t = translator("en", _PLURAL_CATALOGS)
+    assert t("gap.count", count=2) == "{count} gaps"
+    assert t("gap.count", count=0) == "{count} gaps"
+
+
+def test_translator_with_a_count_falls_back_to_english_then_the_suffixed_key() -> None:
+    """The same missing-key degradation `t(key)` already has, applied
+    to the suffixed plural key instead of crashing when a catalog is
+    missing one variant."""
+    t = translator("es", _PLURAL_CATALOGS)
+    assert t("only.in.en.count", count=1) == "only.in.en.count.one"

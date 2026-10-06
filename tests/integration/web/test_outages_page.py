@@ -263,7 +263,8 @@ def test_the_gap_review_queue_count_excludes_an_already_decided_gap(
         with client:
             response = client.get("/outages")
 
-        assert "1 gaps awaiting review" in response.text
+        assert "1 gap awaiting review" in response.text
+        assert "1 gaps awaiting review" not in response.text
     finally:
         application.database.close()
 

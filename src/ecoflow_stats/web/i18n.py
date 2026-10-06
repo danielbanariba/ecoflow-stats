@@ -69,15 +69,27 @@ def load_catalogs(catalog_dir: Path | None = None) -> dict[str, dict[str, str]]:
     }
 
 
-def translator(lang: str, catalogs: Mapping[str, Mapping[str, str]]) -> Callable[[str], str]:
+def translator(lang: str, catalogs: Mapping[str, Mapping[str, str]]) -> Callable[..., str]:
     """Return a `t(key)` lookup bound to `lang`. A key missing from
     `lang`'s own catalog falls back to English, then to the key itself,
-    so a page never crashes rendering a translation."""
+    so a page never crashes rendering a translation.
+
+    `t(key, count=n)` looks up a pluralized variant instead: `key +
+    ".one"` for an exact count of 1, `key + ".other"` for every other
+    count (English and Spanish both only distinguish singular/plural,
+    unlike languages with more plural forms) -- the same fallback-to-
+    English-then-key-itself behavior applies to the suffixed key, so a
+    missing plural variant degrades the same way a missing plain key
+    already does, rather than crashing. A one-off `"{count} gaps
+    awaiting review"` string hard-coded for every count (Named Defect
+    "Missing translation" cousin: wrong for a count of exactly one) is
+    exactly what this `count` seam exists to let a caller avoid."""
     fallback = catalogs[_FALLBACK_LANG]
     catalog = catalogs.get(lang, fallback)
 
-    def t(key: str) -> str:
-        return catalog.get(key, fallback.get(key, key))
+    def t(key: str, count: int | None = None) -> str:
+        lookup_key = key if count is None else f"{key}.{'one' if count == 1 else 'other'}"
+        return catalog.get(lookup_key, fallback.get(lookup_key, lookup_key))
 
     return t
 

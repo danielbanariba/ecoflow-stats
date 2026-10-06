@@ -117,7 +117,7 @@
 
 <section class="outages-gap-review-section" aria-label="{{ t('outages.gap_review.heading') }}">
   <h2>{{ t('outages.gap_review.heading') }}</h2>
-  <p>{{ t('outages.gap_review.count').format(count=view.gap_review_count) }}</p>
+  <p>{{ t('outages.gap_review.count', count=view.gap_review_count).format(count=view.gap_review_count) }}</p>
   <button
     type="button"
     class="gap-review-expand"

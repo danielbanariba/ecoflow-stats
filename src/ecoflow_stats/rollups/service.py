@@ -17,13 +17,17 @@ the same row, matching `storage.rollups`'s "additively extensible"
 design intent.
 
 Grid presence (task 20.2) reuses `outages.model.judge()` through
-`grid.quality.grid_quality_range`'s own default `DetectorConfig()`
-rather than the application's actually-configured threshold/gap
-settings: threading `Settings.outage_threshold_v`/`gap_threshold` into
-this job would need `jobs.py`/`web.app._start_rollups_job` changes
-outside this batch's declared edit surface, the same documented,
-disclosed non-threading precedent batch fix01 already established for
-`daily_energy_for_samples`'s `tariff=None`.
+`grid.quality.grid_quality_range`, given the caller's own `config`
+(DATA-01, qa-report-data-01.md: this job used to always judge against
+`grid_quality_range`'s hardcoded `DetectorConfig()` default instead of
+the application's actually-configured threshold/gap settings, so the
+outages page and the grid voltage chart could silently disagree about
+a day's grid presence) -- `jobs.py`'s `run_rollups_forever` and
+`web.app._start_rollups_job` thread the real configured `DetectorConfig`
+through, the same way they already do for the 5-minute derive job.
+`tariff`/`currency` stay the one remaining disclosed non-threading gap
+(`daily_energy_for_samples`'s `tariff=None` below): no `Settings` field
+configures either yet, so there is no configured value to thread.
 
 Mirrors `outages.service.derive_outages`'s shape closely: the caller
 owns the surrounding `BEGIN IMMEDIATE` transaction and commits it once,
@@ -49,6 +53,7 @@ from typing import TYPE_CHECKING
 
 from ecoflow_stats.energy.service import daily_energy_for_samples
 from ecoflow_stats.grid.quality import grid_quality_range
+from ecoflow_stats.outages.model import DetectorConfig
 from ecoflow_stats.timeutil import day_bounds, local_day
 
 if TYPE_CHECKING:
@@ -60,6 +65,7 @@ if TYPE_CHECKING:
 
 _DERIVATION_NAME = "rollups"
 _ROLLUP_VERSION = 1
+_DEFAULT_CONFIG = DetectorConfig()
 
 _ENERGY_FLAG_BITS: dict[str, int] = {"counter_reset": 1, "implausible_jump": 2, "gap_prorated": 4}
 """Mirrors the `energy_flags` bitmask `storage.rollups`' DDL documents
@@ -84,17 +90,31 @@ def decode_energy_flags(flags: int) -> frozenset[str]:
     return frozenset(name for name, bit in _ENERGY_FLAG_BITS.items() if flags & bit)
 
 
-def _params_hash() -> str:
+def _params_hash(config: DetectorConfig, *, tz: str) -> str:
     """A fingerprint of the configurable parameters that change a daily
     rollup's output, mirroring `outages.service._params_hash`'s role for
     the outage detector (design-data section 1: a parameter change
     forces a full recompute exactly like a version bump).
 
-    No rollup parameter exists yet in this slice -- Phase 18 adds
-    `ECOFLOW_STATS_TZ` (day boundaries) and may extend this hash with
-    its actual value instead of the fixed placeholder below.
+    JOB-01 (qa-report-data-01.md): this used to be a fixed placeholder
+    (`sha256(b"battery-only")`) that never changed, so once a device's
+    rollups went clean, no later `ECOFLOW_STATS_OUTAGE_THRESHOLD_V`/
+    `ECOFLOW_STATS_GAP_THRESHOLD`/`ECOFLOW_STATS_TZ` change could ever
+    force a recompute again -- the job could never self-heal from a
+    config change the way `outages.service.derive_outages` already
+    could. `config` covers the grid-presence judgment (DATA-01, same
+    thresholds `derive_outages` uses); `tz` covers day boundaries
+    (`timeutil.local_day`/`day_bounds`), the other value this job's
+    output actually depends on. `tariff`/`currency` stay out: no
+    `Settings` field configures either yet (see this module's
+    docstring), so there is no configured value whose change this hash
+    would need to detect.
     """
-    return hashlib.sha256(b"battery-only").hexdigest()
+    raw = (
+        f"{config.threshold_v}:{config.confirm_readings}:"
+        f"{config.gap_threshold_s}:{config.stale_repeat}:{tz}"
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def _day_start(day: str, tz: str) -> int:
@@ -151,6 +171,7 @@ def derive_rollups(
     derivation_store: DerivationStore,
     now: datetime,
     tz: str = "UTC",
+    config: DetectorConfig = _DEFAULT_CONFIG,
     day_fn: Callable[[int], str] | None = None,
     full: bool = False,
 ) -> bool:
@@ -162,6 +183,12 @@ def derive_rollups(
     requirement "Day Boundaries Use a Configurable Local Timezone")
     unless ``day_fn`` overrides it -- the seam this module's previous
     ``_utc_day`` placeholder (Phase 17) existed for, now closed.
+
+    ``config`` is the detector thresholds grid presence is judged
+    against (DATA-01) -- the caller must pass the application's real
+    configured `DetectorConfig`, the same one `derive_outages` already
+    uses, or grid presence here can silently disagree with the outages
+    page.
 
     Known gap (same category as apply-progress-batch13's documented
     gaps, not fixed here): on an INCREMENTAL run, the energy window
@@ -198,7 +225,7 @@ def derive_rollups(
     effective_day_fn: Callable[[int], str] = (
         day_fn if day_fn is not None else partial(local_day, tz=tz)
     )
-    params_hash = _params_hash()
+    params_hash = _params_hash(config, tz=tz)
     existing = derivation_store.get(device_id, _DERIVATION_NAME)
     needs_full = (
         existing is None
@@ -255,7 +282,7 @@ def derive_rollups(
                 chg_ac_est_wh=energy.chg_ac_est_wh,
                 energy_flags=_encode_energy_flags(energy.flags),
             )
-        grid = grid_quality_range(day_samples)
+        grid = grid_quality_range(day_samples, config=config)
         if grid == "unavailable":
             rollup_store.upsert_grid(
                 device_id,

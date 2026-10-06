@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from ecoflow_stats import bootstrap
 from ecoflow_stats.config import load_settings
 from ecoflow_stats.jobs import SupervisedTask, SupervisedTaskHandle
+from ecoflow_stats.outages.model import DetectorConfig
 from ecoflow_stats.web import app as web_app
 from ecoflow_stats.web.app import create_app
 from tests.fakes import FakeClock
@@ -249,6 +250,51 @@ def test_the_default_rollups_job_is_started_with_the_applications_own_devices_cl
     assert captured["database"] is application.database
     assert captured["clock"] is application.clock
     assert captured["tz"] == application.settings.tz
+    application.database.close()
+
+
+def test_the_default_rollups_job_is_started_with_the_applications_own_configured_detector_thresholds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """DATA-01 (orchestrator finding, qa-report-data-01.md): the
+    rollups job judged grid presence with `DetectorConfig()`'s
+    hardcoded defaults instead of the configured thresholds, so a
+    non-default `ECOFLOW_STATS_OUTAGE_THRESHOLD_V`/
+    `ECOFLOW_STATS_GAP_THRESHOLD` silently had no effect on the hourly
+    rollups job even though the exact same configured values already
+    reached the outage detector (`_start_derive_job`) -- the outages
+    page and the grid voltage chart could disagree about which days
+    had grid present.
+
+    Pass-2 target: reverting `_start_rollups_job`'s new `config=`
+    argument (or defaulting it back to `DetectorConfig()`) turns this
+    red -- `captured["config"]` would carry the threshold-50.0/
+    gap-150 defaults instead of these deliberately non-default
+    values."""
+    env = {
+        **VALID_ENV,
+        "ECOFLOW_STATS_DATA_DIR": str(tmp_path / "data"),
+        "ECOFLOW_STATS_OUTAGE_THRESHOLD_V": "80",
+        "ECOFLOW_STATS_GAP_THRESHOLD": "300",
+    }
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    settings = load_settings(os.environ)
+    application = bootstrap.build(settings, clock=FakeClock(datetime(2026, 1, 1, tzinfo=UTC)))
+    captured: dict[str, object] = {}
+
+    async def _fake_run_rollups_forever(device_ids: object, **kwargs: object) -> None:
+        captured["config"] = kwargs.get("config")
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(web_app, "run_rollups_forever", _fake_run_rollups_forever)
+
+    app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+
+    with TestClient(app):
+        pass
+
+    assert captured["config"] == DetectorConfig(threshold_v=80.0, gap_threshold_s=300)
     application.database.close()
 
 

@@ -38,6 +38,7 @@ from ecoflow_stats.web.routes.api import ApiContext, router
 
 _NOW = datetime(2026, 1, 10, 0, 0, tzinfo=UTC)
 _NOW_TS = int(_NOW.timestamp())
+_DEFAULT_DETECTOR_CONFIG = DetectorConfig()
 
 
 def _reading(**overrides: object) -> Reading:
@@ -45,7 +46,10 @@ def _reading(**overrides: object) -> Reading:
 
 
 def _client(
-    tmp_path: Path, *, samples: list[tuple[int, Reading]] | None = None
+    tmp_path: Path,
+    *,
+    samples: list[tuple[int, Reading]] | None = None,
+    detector_config: DetectorConfig = _DEFAULT_DETECTOR_CONFIG,
 ) -> tuple[TestClient, Database, int]:
     db = Database(tmp_path / "ecoflow-stats.db")
     record = DeviceStore(db.writer).upsert(
@@ -61,7 +65,7 @@ def _client(
         now=lambda: _NOW,
         stale_threshold_s=180,
         poll_interval_s=60,
-        detector_config=DetectorConfig(),
+        detector_config=detector_config,
         sample_store=sample_store,
         outage_store=None,  # type: ignore[arg-type]
         device_records=(record,),
@@ -196,6 +200,34 @@ def test_grid_series_returns_one_bucketed_point_per_window_with_its_own_range(
     first, second = body["points"]
     assert (first["grid_v_min"], first["grid_v_max"]) == (118.0, 122.0)
     assert second["grid_v_min"] == 200.0
+
+
+def test_grid_series_judges_presence_against_the_configured_threshold_not_the_default(
+    tmp_path: Path,
+) -> None:
+    """DATA-01 (orchestrator finding, qa-report-data-01.md): before
+    this fix, `grid_series_route` called `grid_quality_range` with no
+    `config=` at all, so it always judged presence against the
+    hardcoded 50.0V default no matter what `ApiContext.detector_config`
+    actually held -- the same chart could show grid "present" at a
+    voltage the outages page (which already reads the real configured
+    threshold) judges absent.
+
+    Pass-2 target: dropping the route's new `config=ctx.detector_config`
+    argument turns this red -- a lone 60V sample would still produce
+    one point (judged PRESENT under the 50.0 default) instead of an
+    empty list."""
+    range_start = _NOW_TS - 600
+    samples = [(range_start, _reading(grid_v=60.0, grid_hz=59.9))]
+    client, _db, _device_id = _client(
+        tmp_path, samples=samples, detector_config=DetectorConfig(threshold_v=100.0)
+    )
+
+    response = client.get(
+        "/api/v1/grid/series", params={"from": range_start, "to": range_start + 600}
+    )
+
+    assert response.json()["points"] == []
 
 
 # --- end-to-end: the real derive path persists, the real route serves --

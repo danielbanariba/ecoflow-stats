@@ -169,6 +169,7 @@ async def run_rollups_forever(
     database: Database,
     clock: Clock,
     tz: str = "UTC",
+    config: DetectorConfig = _DEFAULT_DERIVE_CONFIG,
     interval_s: float = 3600.0,
 ) -> None:
     """Recompute daily rollups for every configured device every
@@ -183,6 +184,13 @@ async def run_rollups_forever(
     own dirty-day tracking (`storage.derivations.DerivationStore`) only
     recomputes days from the dirty mark onward, never the whole history
     again, once a device is no longer in its very first full recompute.
+
+    ``config`` (DATA-01, qa-report-data-01.md) is the grid-presence
+    detector thresholds, threaded through exactly like
+    `run_derive_forever`'s own `config` already is -- without it,
+    `derive_rollups` would silently fall back to `DetectorConfig()`'s
+    hardcoded defaults, disagreeing with the outages page whenever the
+    application is configured with a different threshold.
 
     Same per-device isolation and own-transaction-per-device shape as
     `run_derive_forever`, so one device's recompute bug never starves
@@ -203,6 +211,7 @@ async def run_rollups_forever(
                     derivation_store=derivation_store,
                     now=now,
                     tz=tz,
+                    config=config,
                 )
             except asyncio.CancelledError:
                 database.writer.rollback()

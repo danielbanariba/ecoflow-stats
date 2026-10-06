@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from ecoflow_stats.devices.reading import Reading
+from ecoflow_stats.outages.model import DetectorConfig
 from ecoflow_stats.rollups import service as rollups_service
 from ecoflow_stats.rollups.service import derive_rollups
 from ecoflow_stats.storage.database import Database
@@ -26,6 +27,7 @@ from ecoflow_stats.storage.rollups import DailyGridRollup, DailyRollup, RollupSt
 from ecoflow_stats.storage.samples import SampleStore
 
 _NOW = datetime(2026, 10, 6, tzinfo=UTC)
+_DEFAULT_CONFIG = DetectorConfig()
 
 
 def _reading(**overrides: object) -> Reading:
@@ -45,7 +47,15 @@ class _Env:
         for ts, reading in samples:
             store.add(device_id, ts, 1, reading)
 
-    def derive(self, device_id: int, *, now: datetime = _NOW, full: bool = False) -> bool:
+    def derive(
+        self,
+        device_id: int,
+        *,
+        now: datetime = _NOW,
+        full: bool = False,
+        tz: str = "UTC",
+        config: DetectorConfig = _DEFAULT_CONFIG,
+    ) -> bool:
         self.writer.execute("BEGIN IMMEDIATE")
         try:
             ran = derive_rollups(
@@ -55,6 +65,8 @@ class _Env:
                 derivation_store=DerivationStore(self.writer),
                 now=now,
                 full=full,
+                tz=tz,
+                config=config,
             )
         except Exception:
             self.writer.rollback()
@@ -577,3 +589,82 @@ def test_a_version_change_forces_a_full_recompute_even_without_a_dirty_mark(
     assert ran is True
     row = DerivationStore(env.writer).get(device_id, "rollups")
     assert row is not None and row.version == 2
+
+
+# --- derive_rollups: configured detector thresholds (DATA-01, JOB-01) ------
+
+
+def test_grid_presence_is_judged_against_the_configured_threshold_not_the_default(
+    env: _Env,
+) -> None:
+    """DATA-01 (orchestrator finding, qa-report-data-01.md): before this
+    fix, `derive_rollups` always judged grid presence with
+    `grid.quality.grid_quality_range`'s hardcoded `DetectorConfig()`
+    default (`threshold_v=50.0`), ignoring any `config=` it was handed
+    -- a device configured with a HIGHER threshold would have every
+    one of its real outages rolled up as "grid present" regardless,
+    silently disagreeing with the same day's outages page (which
+    already judges with the real configured threshold).
+
+    Pass-2 target: dropping `derive_rollups`'s `config=config` argument
+    to `grid_quality_range` (reverting to its bare call) turns this
+    red -- the persisted row would show `grid_readings=1` instead of
+    `0`, since 60V alone judges PRESENT under the 50.0 default."""
+    device_id = env.device("BA31ZEB1SF7F0001")
+    env.insert(device_id, [(0, _reading(grid_v=60.0, grid_hz=59.9))])
+
+    assert env.derive(device_id, config=DetectorConfig(threshold_v=100.0)) is True
+
+    row = env.grid_rollup(device_id, "1970-01-01")
+    assert row is not None
+    assert row.grid_v_min is None
+    assert row.grid_readings == 0
+
+
+def test_a_detector_config_change_forces_a_full_recompute_even_without_a_dirty_mark(
+    env: _Env,
+) -> None:
+    """JOB-01 (qa-report-data-01.md): before this fix, `_params_hash`
+    was a frozen placeholder (`sha256(b"battery-only")`), so once a
+    device's rollups went clean, NO configuration change could ever
+    force a recompute again -- unlike `outages.service`'s own
+    `_params_hash(config)`, which already does this correctly. A
+    threshold change made after the first clean run must still force a
+    full recompute on the next tick, the same self-healing guarantee
+    `test_a_version_change_forces_a_full_recompute_even_without_a_dirty_
+    mark` above already proves for the rollup version.
+
+    Pass-2 target: reverting `_params_hash` to ignore its `config`
+    argument (the frozen placeholder) turns this red -- `ran` would be
+    `False`, since the stored derivation already looks clean."""
+    device_id = env.device("BA31ZEB1SF7F0001")
+    env.insert(device_id, [(0, _reading(soc=90))])
+    assert env.derive(device_id, config=DetectorConfig(threshold_v=50.0)) is True
+
+    ran = env.derive(
+        device_id,
+        now=datetime(2026, 10, 6, 1, tzinfo=UTC),
+        config=DetectorConfig(threshold_v=80.0),
+    )
+
+    assert ran is True
+
+
+def test_a_timezone_change_forces_a_full_recompute_even_without_a_dirty_mark(
+    env: _Env,
+) -> None:
+    """JOB-01: day boundaries depend on `tz` (energy requirement "Day
+    Boundaries Use a Configurable Local Timezone") -- a configured
+    timezone change must re-bucket every day exactly like a detector
+    threshold change must, or a day already rolled up under the old
+    timezone's boundaries would keep its stale boundaries forever.
+
+    Pass-2 target: reverting `_params_hash` to ignore its `tz` keyword
+    argument turns this red -- `ran` would be `False`."""
+    device_id = env.device("BA31ZEB1SF7F0001")
+    env.insert(device_id, [(0, _reading(soc=90))])
+    assert env.derive(device_id, tz="UTC") is True
+
+    ran = env.derive(device_id, now=datetime(2026, 10, 6, 1, tzinfo=UTC), tz="America/New_York")
+
+    assert ran is True

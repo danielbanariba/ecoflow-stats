@@ -575,7 +575,7 @@ def grid_series_route(
         buckets.setdefault(bucket_start, []).append((row.ts, row.reading))
     points = []
     for bucket_start in sorted(buckets):
-        quality = grid_quality_range(buckets[bucket_start])
+        quality = grid_quality_range(buckets[bucket_start], config=ctx.detector_config)
         if quality == "unavailable":
             continue
         points.append(

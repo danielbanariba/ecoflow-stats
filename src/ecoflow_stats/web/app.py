@@ -115,6 +115,15 @@ def _start_rollups_job(application: Application) -> SupervisedTaskHandle:
     process -- a real deployment's `daily_rollups` table, and therefore
     the battery page's DoD/trend/autonomy tables, would stay empty
     forever.
+
+    DATA-01 (qa-report-data-01.md): passes the application's own
+    configured detector thresholds, the same `DetectorConfig`
+    `_start_derive_job` already builds for the 5-minute derive job --
+    without this, `run_rollups_forever`'s own default silently fell
+    back to `DetectorConfig()`'s hardcoded 50.0V/150s, so the outages
+    page and the grid voltage chart could disagree about a day's grid
+    presence whenever a device is configured with a different
+    threshold.
     """
 
     async def _run() -> None:
@@ -123,6 +132,10 @@ def _start_rollups_job(application: Application) -> SupervisedTaskHandle:
             database=application.database,
             clock=application.clock,
             tz=application.settings.tz,
+            config=DetectorConfig(
+                threshold_v=application.settings.outage_threshold_v,
+                gap_threshold_s=application.settings.gap_threshold,
+            ),
         )
 
     supervised = SupervisedTask(name="rollups-job", target=_run, clock=application.clock)

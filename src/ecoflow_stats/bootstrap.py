@@ -26,15 +26,21 @@ from ecoflow_stats.acquisition.ecoflow_client import EcoFlowCloudClient
 from ecoflow_stats.clock import SystemClock
 from ecoflow_stats.devices.models import REGISTERED
 from ecoflow_stats.devices.registry import AdapterRegistry
+from ecoflow_stats.notifications.ntfy import NtfyNotifier
+from ecoflow_stats.notifications.service import NotificationService
+from ecoflow_stats.outages.model import DetectorConfig
+from ecoflow_stats.outages.service import build_live_outage_state
 from ecoflow_stats.storage.database import Database
 from ecoflow_stats.storage.derivations import DerivationStore
 from ecoflow_stats.storage.devices import DeviceRecord, DeviceStore
 from ecoflow_stats.storage.failures import FailureLog
+from ecoflow_stats.storage.notifications import NotificationLedger
 from ecoflow_stats.storage.runs import RunLog
 from ecoflow_stats.storage.samples import SampleStore
 
 if TYPE_CHECKING:
     from ecoflow_stats.config import Settings
+    from ecoflow_stats.outages.detector import LiveOutageState
     from ecoflow_stats.ports import Clock, DeviceCloud
 
 _DATABASE_FILENAME = "ecoflow-stats.db"
@@ -68,6 +74,8 @@ class Application:
     registry: AdapterRegistry
     device_records: tuple[DeviceRecord, ...]
     collector_devices: tuple[CollectorDevice, ...]
+    notification_service: NotificationService | None
+    live_outage_states: dict[int, LiveOutageState]
 
 
 def build(
@@ -115,6 +123,40 @@ def build(
     registry = AdapterRegistry(REGISTERED)
     run_id = run_log.start(now_s, __version__)
 
+    # Opt-in only (notifications requirement: "Notifications Are
+    # Opt-In") -- without a configured topic there is nothing for a live
+    # detector replay to drive, so neither is built.
+    notification_service: NotificationService | None = None
+    live_outage_states: dict[int, LiveOutageState] = {}
+    if settings.ntfy_topic is not None:
+        device_labels = (
+            {record.id: f"…{record.sn[-4:]}" for record in device_records}
+            if len(device_records) > 1
+            else {}
+        )
+        notification_service = NotificationService(
+            ledger=NotificationLedger(database.writer),
+            notifier=NtfyNotifier(
+                base_url=settings.ntfy_url, topic=settings.ntfy_topic, token=settings.ntfy_token
+            ),
+            clock=active_clock,
+            lang=settings.notify_lang,
+            device_labels=device_labels,
+        )
+        detector_config = DetectorConfig(
+            threshold_v=settings.outage_threshold_v, gap_threshold_s=settings.gap_threshold
+        )
+        live_outage_states = {
+            record.id: build_live_outage_state(
+                record.id,
+                sample_store=sample_store,
+                derivation_store=derivation_store,
+                config=detector_config,
+                now=active_clock.now(),
+            )
+            for record in device_records
+        }
+
     return Application(
         settings=settings,
         clock=active_clock,
@@ -129,6 +171,8 @@ def build(
         registry=registry,
         device_records=device_records,
         collector_devices=collector_devices,
+        notification_service=notification_service,
+        live_outage_states=live_outage_states,
     )
 
 

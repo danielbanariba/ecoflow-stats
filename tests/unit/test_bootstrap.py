@@ -120,6 +120,46 @@ def test_build_pairs_each_collector_device_with_its_own_device_record(
         application.database.close()
 
 
+def test_build_builds_no_notification_service_without_a_configured_topic(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Notifications requirement "Notifications Are Opt-In": with no
+    `ECOFLOW_STATS_NTFY_TOPIC`, the composition root must not build a
+    notifier or replay any live detector state -- there is nothing for
+    either to drive."""
+    settings = _settings(monkeypatch, tmp_path / "data")
+    clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
+
+    application = bootstrap.build(settings, clock=clock)
+
+    try:
+        assert application.notification_service is None
+        assert application.live_outage_states == {}
+    finally:
+        application.database.close()
+
+
+def test_build_builds_a_notification_service_and_live_states_when_a_topic_is_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """With a topic configured, the collector needs a real
+    `NotificationService` and one replayed `LiveOutageState` per
+    configured device ready before its first tick."""
+    monkeypatch.setenv("ECOFLOW_STATS_NTFY_TOPIC", "test-topic")
+    settings = _settings(monkeypatch, tmp_path / "data")
+    clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
+
+    application = bootstrap.build(settings, clock=clock)
+
+    try:
+        assert application.notification_service is not None
+        assert len(application.live_outage_states) == 2
+        for record in application.device_records:
+            assert record.id in application.live_outage_states
+    finally:
+        application.database.close()
+
+
 def test_build_starts_one_app_run_and_returns_its_positive_id(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

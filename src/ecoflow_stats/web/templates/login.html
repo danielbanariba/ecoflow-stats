@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Log in · {{ t('app.name') }}{% endblock %}
+{% block title %}{{ t('login.title') }} · {{ t('app.name') }}{% endblock %}
 {% block content %}
 <div class="page-head reveal login-shell">
-  <h1 class="page-head__title">Log in</h1>
+  <h1 class="page-head__title">{{ t('login.title') }}</h1>
 </div>
 
-<section class="login-shell reveal" aria-label="Log in">
+<section class="login-shell reveal" aria-label="{{ t('login.title') }}">
   <div class="tile">
     {% if error == "wrong_password" %}
     <p class="login-error" role="alert">{{ t('login.error.wrong_password') }}</p>
@@ -17,10 +17,10 @@
       <input type="hidden" name="next" value="{{ next }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div>
-        <label class="field-label" for="login-password">Password</label>
+        <label class="field-label" for="login-password">{{ t('login.password_label') }}</label>
         <input id="login-password" class="text-input" type="password" name="password" required autofocus>
       </div>
-      <button type="submit" class="btn btn--primary">Log in</button>
+      <button type="submit" class="btn btn--primary">{{ t('login.submit_button') }}</button>
     </form>
   </div>
 </section>

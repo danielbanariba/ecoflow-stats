@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -430,7 +431,14 @@ def login_submit(request: Request, password: str = Form(...), next: str = Form("
             return response
         security.throttle.record_failure(address)
 
-    return RedirectResponse(url=f"/login?next={target}&error=wrong_password", status_code=303)
+    # UI-08: `target` may itself carry a query string (e.g. "/outages?from=...&to=...")
+    # now that `safe_next_path` preserves one -- it must be percent-encoded before
+    # being embedded as the VALUE of this route's own outer `next=` query parameter,
+    # or its `&`/`=` characters would corrupt/truncate the outer query string.
+    encoded_target = quote(target, safe="/")
+    return RedirectResponse(
+        url=f"/login?next={encoded_target}&error=wrong_password", status_code=303
+    )
 
 
 @router.post("/logout", dependencies=[Depends(require_csrf)])

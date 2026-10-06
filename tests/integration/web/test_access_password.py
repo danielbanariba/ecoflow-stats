@@ -104,6 +104,157 @@ def test_an_unauthenticated_request_to_a_protected_route_is_rejected(
         application.database.close()
 
 
+def test_the_login_redirect_preserves_the_full_query_string_of_a_get_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UI-08 (qa-report-ui-01.md): before this fix, the access-control
+    redirect only ever carried `request.url.path` as `next`, silently
+    discarding any query string -- following a link to a specific
+    filtered date range while logged out, then logging in, landed back
+    on the unfiltered page instead of the one the user asked for.
+
+    Pass-2 target: reverting `AccessControlMiddleware.dispatch`'s
+    redirect to build `next` from `request.url.path` alone (dropping
+    `request.url.query`) turns this red -- the asserted `next` would
+    become `/outages` with no query string at all."""
+    application = _build(monkeypatch, tmp_path)
+    try:
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
+
+        with TestClient(app, client=_LOCAL_CLIENT, follow_redirects=False) as client:
+            challenge = client.get("/outages?from=1767225600&to=1767312000")
+            assert challenge.status_code == 303
+            location = challenge.headers["location"]
+            assert location == ("/login?next=/outages%3Ffrom%3D1767225600%26to%3D1767312000")
+
+            login_response = client.post(
+                "/login",
+                data={
+                    "password": _PASSWORD,
+                    "next": "/outages?from=1767225600&to=1767312000",
+                },
+                headers=_csrf_headers(client, application),
+            )
+
+        assert login_response.status_code == 303
+        assert login_response.headers["location"] == "/outages?from=1767225600&to=1767312000"
+    finally:
+        application.database.close()
+
+
+def test_a_wrong_password_redirect_preserves_the_full_next_query_string(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UI-08 embedding edge case: `login_submit`'s own wrong-password
+    redirect builds `/login?next=...&error=wrong_password` -- once
+    `next` can itself contain `&`/`=` (a preserved query string), that
+    value must be percent-encoded before being embedded as this outer
+    URL's own `next` parameter, or its `&to=...` segment gets parsed
+    as a second, unrelated top-level query parameter instead of staying
+    part of `next`'s value.
+
+    Pass-2 target: dropping the `quote(target, safe="/")` call in
+    `login_submit` (reverting to the raw f-string embed) turns this
+    red -- the reconstructed `next` would be truncated to
+    `/outages?from=1767225600`, silently losing `&to=...`."""
+    application = _build(monkeypatch, tmp_path)
+    try:
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
+
+        with TestClient(app, client=_LOCAL_CLIENT, follow_redirects=False) as client:
+            wrong_password_response = client.post(
+                "/login",
+                data={
+                    "password": "not-the-password",
+                    "next": "/outages?from=1767225600&to=1767312000",
+                },
+                headers=_csrf_headers(client, application),
+            )
+            assert wrong_password_response.status_code == 303
+            location = wrong_password_response.headers["location"]
+            assert location == (
+                "/login?next=/outages%3Ffrom%3D1767225600%26to%3D1767312000&error=wrong_password"
+            )
+
+            rendered = client.get(location)
+
+        assert rendered.status_code == 200
+        assert 'value="/outages?from=1767225600&amp;to=1767312000"' in rendered.text
+    finally:
+        application.database.close()
+
+
+def test_a_non_get_routes_own_path_never_becomes_the_login_redirect_target(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UI-09 (qa-report-ui-01.md): the language-switch form on every
+    page (including the login page itself) is a `POST /preferences`.
+    An unauthenticated submission used to carry `next=/preferences`
+    straight through -- but `/preferences` has no `GET` route at all,
+    so completing login afterward 405'd instead of landing anywhere
+    useful. The fix falls back to the same-origin `Referer`'s own path
+    and query string, or `/` when there is none.
+
+    Pass-2 target: reverting `_next_target` to always return
+    `request.url.path` (dropping the `request.method != "GET"` branch
+    into `_referer_next_path`) turns this red -- `next` would become
+    `/preferences` again."""
+    application = _build(monkeypatch, tmp_path)
+    try:
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
+
+        with TestClient(app, client=_LOCAL_CLIENT, follow_redirects=False) as client:
+            from_referer = client.post(
+                "/preferences",
+                data={"lang": "es"},
+                headers={"referer": "http://testserver/outages?from=1767225600"},
+            )
+            assert from_referer.status_code == 303
+            assert from_referer.headers["location"] == "/login?next=/outages%3Ffrom%3D1767225600"
+
+            no_referer = client.post("/preferences", data={"lang": "es"})
+            assert no_referer.status_code == 303
+            assert no_referer.headers["location"] == "/login?next=/"
+
+            cross_origin_referer = client.post(
+                "/preferences",
+                data={"lang": "es"},
+                headers={"referer": "http://evil.example/outages"},
+            )
+            assert cross_origin_referer.status_code == 303
+            assert cross_origin_referer.headers["location"] == "/login?next=/"
+
+            # Completing login from the referer-derived target lands on a
+            # real page -- never the 405 that replaying `/preferences` as
+            # a `GET` would have produced.
+            login_response = client.post(
+                "/login",
+                data={"password": _PASSWORD, "next": "/outages?from=1767225600"},
+                headers=_csrf_headers(client, application),
+            )
+            assert login_response.status_code == 303
+            landing = client.get(login_response.headers["location"])
+
+        assert landing.status_code == 200
+    finally:
+        application.database.close()
+
+
 def test_the_health_check_remains_reachable_without_credentials(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -31,7 +31,7 @@ import secrets
 import time
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
@@ -278,16 +278,59 @@ def clear_session_cookie(response: Response) -> None:
 
 
 def safe_next_path(raw: str | None) -> str:
-    """Only a same-site, local path is a safe redirect target (design's
-    "local paths only" caveat on `next`) — anything else collapses to
-    `/`, never an open redirect to an attacker-controlled host."""
-    if raw and raw.startswith("/") and not raw.startswith("//"):
-        return raw
-    return "/"
+    """Only a same-site, local path (optionally with its own query
+    string) is a safe redirect target (design's "local paths only"
+    caveat on `next`) -- anything else collapses to `/`, never an open
+    redirect to an attacker-controlled host.
+
+    **UI-08 hardening**: rejects a protocol-relative "//host" as
+    before, plus any backslash at all. A browser normalizes a leading
+    backslash the same way it normalizes a second slash -- an
+    attacker-controlled host smuggled past the "//" check alone -- and
+    no real route in this app ever legitimately contains a backslash,
+    so treating any as suspicious costs nothing real."""
+    if not raw or not raw.startswith("/") or raw.startswith("//") or "\\" in raw:
+        return "/"
+    return raw
 
 
 def _is_exempt_from_session(path: str) -> bool:
     return path == _LOGIN_PATH or path.startswith(_STATIC_PREFIX)
+
+
+def _referer_next_path(request: Request) -> str:
+    """UI-09: a non-`GET` request (e.g. the language-switch form's own
+    `POST /preferences`) can never safely become `next` -- re-visiting
+    it with a `GET`, which is exactly what following a redirect does,
+    404s or 405s instead of landing on a real page. Falls back to the
+    referring page's own path and query string (the page that form was
+    actually submitted from), or `/` when there is no usable,
+    same-origin `Referer`."""
+    referer = request.headers.get("referer")
+    if not referer:
+        return "/"
+    parsed = urlsplit(referer)
+    host = (request.headers.get("host") or "").lower()
+    if parsed.netloc and parsed.netloc.lower() != host:
+        return "/"  # a different origin's own page is never a safe landing target
+    target = parsed.path
+    if parsed.query:
+        target = f"{target}?{parsed.query}"
+    return safe_next_path(target)
+
+
+def _next_target(request: Request) -> str:
+    """UI-08/UI-09: the exact value this unauthenticated request's own
+    login redirect should carry as `next`. A `GET` request's full
+    path+query is always safe to replay later (whatever just rendered
+    it will render it again); anything else falls back to the
+    referring page instead of the mutating route itself."""
+    if request.method != "GET":
+        return _referer_next_path(request)
+    target = request.url.path
+    if request.url.query:
+        target = f"{target}?{request.url.query}"
+    return target
 
 
 class AccessControlMiddleware(BaseHTTPMiddleware):
@@ -323,7 +366,8 @@ class AccessControlMiddleware(BaseHTTPMiddleware):
             # redirect unchanged.
             return JSONResponse({"detail": "authentication required"}, status_code=401)
 
-        return RedirectResponse(url=f"{_LOGIN_PATH}?next={request.url.path}", status_code=303)
+        next_target = quote(_next_target(request), safe="/")
+        return RedirectResponse(url=f"{_LOGIN_PATH}?next={next_target}", status_code=303)
 
 
 def new_csrf_secret() -> str:

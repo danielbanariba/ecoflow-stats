@@ -82,6 +82,32 @@ def test_a_spanish_browser_preference_renders_spanish(
         application.database.close()
 
 
+def test_the_login_page_renders_spanish_translations(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UI-06 (qa-report-ui-01.md): the login page's own title, password
+    label, and submit button were hardcoded English strings, so a
+    Spanish-negotiated visitor saw a page that was otherwise translated
+    except for the one page they hit before authenticating.
+
+    Pass-2 target: reverting `login.html` to the literal "Log in" /
+    "Password" strings (instead of `{{ t('login.title') }}` /
+    `{{ t('login.password_label') }}` / `{{ t('login.submit_button') }}`)
+    turns this red."""
+    client, application = _app(monkeypatch, tmp_path)
+    try:
+        with client:
+            response = client.get("/login", headers={"accept-language": "es-HN,es;q=0.9"})
+
+        assert response.status_code == 200
+        assert "Iniciar sesión" in response.text
+        assert "Contraseña" in response.text
+        assert "Log in" not in response.text
+        assert "Password" not in response.text
+    finally:
+        application.database.close()
+
+
 def test_an_unsupported_preference_falls_back_to_english(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

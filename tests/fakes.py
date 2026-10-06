@@ -1,6 +1,5 @@
 """Test doubles shared across the suite.
 
-``RecordingNotifier`` is added once the notification work unit needs it.
 Triangulation skipped for the fakes themselves: they are test
 infrastructure, not behavior under test, and are exercised indirectly
 through the real tests that use them.
@@ -12,10 +11,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from ecoflow_stats.notifications.ntfy import NotifyError
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from ecoflow_stats.acquisition.ecoflow_client import DeviceInfo
+    from ecoflow_stats.notifications.messages import Message
 
 
 class FakeClock:
@@ -61,4 +63,23 @@ class FakeDeviceCloud:
         return result
 
 
-__all__ = ["FakeClock", "FakeDeviceCloud"]
+@dataclass
+class RecordingNotifier:
+    """Scriptable `Notifier` double: records every message actually
+    delivered, and can simulate the first `fail_times` attempts failing
+    (each counted, none recorded) before succeeding — so a test can
+    prove delivery, ledger-backed retry, and failure isolation without a
+    real ntfy server."""
+
+    fail_times: int = 0
+    sent: list[Message] = field(default_factory=list)
+    attempts: int = 0
+
+    async def send(self, message: Message) -> None:
+        self.attempts += 1
+        if self.attempts <= self.fail_times:
+            raise NotifyError("simulated ntfy failure")
+        self.sent.append(message)
+
+
+__all__ = ["FakeClock", "FakeDeviceCloud", "RecordingNotifier"]

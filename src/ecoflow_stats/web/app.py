@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -30,12 +31,14 @@ from ecoflow_stats.web.routes.health import HealthContext
 from ecoflow_stats.web.routes.health import router as health_router
 from ecoflow_stats.web.routes.pages import PagesContext
 from ecoflow_stats.web.routes.pages import router as pages_router
+from ecoflow_stats.web.security import AccessControlMiddleware, SecurityContext
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
 
     from ecoflow_stats.bootstrap import Application
 
+logger = logging.getLogger(__name__)
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
@@ -120,6 +123,13 @@ def _build_api_context(application: Application) -> ApiContext:
     )
 
 
+def _build_security_context(application: Application) -> SecurityContext:
+    return SecurityContext(
+        password=application.settings.password,
+        allowed_networks=application.settings.allowed_networks,
+    )
+
+
 def _build_pages_context(application: Application) -> PagesContext:
     return PagesContext(
         now=application.clock.now,
@@ -151,6 +161,11 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if application.settings.password is None:
+            logger.warning(
+                "access-control: no password configured (ECOFLOW_STATS_PASSWORD is unset); "
+                "only the ECOFLOW_STATS_ALLOWED_NETWORKS LAN guard protects this instance"
+            )
         handle = start_collector(application)
         derive_handle = start_derive_job(application)
         app.state.collector_handle = handle
@@ -159,6 +174,7 @@ def create_app(
         app.state.health = _build_health_context(application, handle)
         app.state.api = _build_api_context(application)
         app.state.pages = _build_pages_context(application)
+        app.state.security = _build_security_context(application)
         try:
             yield
         finally:
@@ -170,6 +186,7 @@ def create_app(
             application.run_log.stop(application.run_id, int(application.clock.now().timestamp()))
 
     app = FastAPI(title="ecoflow-stats", lifespan=lifespan)
+    app.add_middleware(AccessControlMiddleware)
     app.include_router(health_router)
     app.include_router(api_router)
     app.include_router(pages_router)

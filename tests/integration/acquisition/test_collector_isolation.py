@@ -17,6 +17,7 @@ from ecoflow_stats.acquisition.ecoflow_client import CloudHttpError, CloudNetwor
 from ecoflow_stats.devices.models import REGISTERED
 from ecoflow_stats.devices.registry import AdapterRegistry
 from ecoflow_stats.storage.database import Database
+from ecoflow_stats.storage.derivations import DerivationStore
 from ecoflow_stats.storage.devices import DeviceStore
 from ecoflow_stats.storage.failures import FailureLog
 from ecoflow_stats.storage.samples import SampleStore
@@ -55,6 +56,68 @@ async def test_a_successful_fetch_stores_a_normalized_sample(tmp_path: Path) -> 
         assert latest is not None
         assert latest.reading.soc == 77
         assert failures.between(device_id, 0, 10**12) == []
+    finally:
+        db.close()
+
+
+@pytest.mark.anyio
+async def test_a_successful_fetch_marks_the_outage_derivation_dirty(tmp_path: Path) -> None:
+    """Without this, a live-collected sample never triggers a recompute:
+    the 5-minute derive job only ever sees a device as dirty when an
+    import marks it (history_import.service.run_import already does this
+    for its own path) -- a device fed only by the collector would never
+    get its outages/gaps derived at all (batch 7's documented known gap).
+    """
+    db, samples, failures, device_id = _env(tmp_path)
+    try:
+        derivations = DerivationStore(db.writer)
+        cloud = FakeDeviceCloud(quota_results={"BA31ZEB1SF7F0001": _VALID_PAYLOAD})
+        device = CollectorDevice(device_id=device_id, sn="BA31ZEB1SF7F0001")
+        clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
+
+        stored = await collect_one(
+            device,
+            cloud=cloud,
+            registry=AdapterRegistry(REGISTERED),
+            samples=samples,
+            failures=failures,
+            clock=clock,
+            derivation_store=derivations,
+        )
+
+        assert stored is True
+        derivation = derivations.get(device_id, "outages")
+        assert derivation is not None
+        assert derivation.dirty_from_ts == int(clock.now().timestamp())
+    finally:
+        db.close()
+
+
+@pytest.mark.anyio
+async def test_a_failed_fetch_does_not_mark_the_outage_derivation_dirty(tmp_path: Path) -> None:
+    """A fetch that stored nothing has nothing new for the derive job to
+    recompute -- marking dirty anyway would force a needless recompute on
+    every failed tick."""
+    db, samples, failures, device_id = _env(tmp_path)
+    try:
+        derivations = DerivationStore(db.writer)
+        cloud = FakeDeviceCloud(
+            quota_results={"BA31ZEB1SF7F0001": CloudTimeout("connection timed out")}
+        )
+        device = CollectorDevice(device_id=device_id, sn="BA31ZEB1SF7F0001")
+        clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
+
+        await collect_one(
+            device,
+            cloud=cloud,
+            registry=AdapterRegistry(REGISTERED),
+            samples=samples,
+            failures=failures,
+            clock=clock,
+            derivation_store=derivations,
+        )
+
+        assert derivations.get(device_id, "outages") is None
     finally:
         db.close()
 

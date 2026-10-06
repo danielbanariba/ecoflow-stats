@@ -27,6 +27,7 @@ from ecoflow_stats.clock import SystemClock
 from ecoflow_stats.devices.models import REGISTERED
 from ecoflow_stats.devices.registry import AdapterRegistry
 from ecoflow_stats.storage.database import Database
+from ecoflow_stats.storage.derivations import DerivationStore
 from ecoflow_stats.storage.devices import DeviceRecord, DeviceStore
 from ecoflow_stats.storage.failures import FailureLog
 from ecoflow_stats.storage.runs import RunLog
@@ -61,6 +62,7 @@ class Application:
     sample_store: SampleStore
     failure_log: FailureLog
     run_log: RunLog
+    derivation_store: DerivationStore
     run_id: int
     cloud: DeviceCloud
     registry: AdapterRegistry
@@ -89,6 +91,7 @@ def build(
     sample_store = SampleStore(database.writer)
     failure_log = FailureLog(database.writer)
     run_log = RunLog(database.writer)
+    derivation_store = DerivationStore(database.writer)
 
     now_s = int(active_clock.now().timestamp())
     device_records = tuple(
@@ -120,6 +123,7 @@ def build(
         sample_store=sample_store,
         failure_log=failure_log,
         run_log=run_log,
+        derivation_store=derivation_store,
         run_id=run_id,
         cloud=active_cloud,
         registry=registry,

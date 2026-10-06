@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from ecoflow_stats.devices.registry import AdapterRegistry
-    from ecoflow_stats.ports import Clock, DeviceCloud, FailureLog, SampleStore
+    from ecoflow_stats.ports import Clock, DerivationStore, DeviceCloud, FailureLog, SampleStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,9 +66,20 @@ async def collect_one(
     samples: SampleStore,
     failures: FailureLog,
     clock: Clock,
+    derivation_store: DerivationStore | None = None,
 ) -> bool:
     """Fetch and store exactly one sample for one device, or record exactly
-    one fetch failure. Returns whether a sample was stored."""
+    one fetch failure. Returns whether a sample was stored.
+
+    ``derivation_store`` is optional only so every existing caller and
+    test that predates this wiring keeps working unchanged; the real
+    collector path (``run_forever``, via ``bootstrap.build``) always
+    supplies it now. When given, and a sample was actually stored, marks
+    the device's ``outages`` derivation dirty from this tick's timestamp
+    -- the same trigger `history_import.service.run_import` already uses
+    for its own path (design-data section 4.3: "collector tick
+    (dirty_from = sample ts)").
+    """
     ts = int(clock.now().timestamp())
     try:
         payload = await cloud.fetch_quota(device.sn)
@@ -103,6 +114,8 @@ async def collect_one(
             FetchFailure(ts=ts, outcome="store", code=None, attempts=1, latency_ms=None),
         )
         return False
+    if derivation_store is not None:
+        derivation_store.mark_dirty(device.device_id, "outages", ts)
     return True
 
 
@@ -114,6 +127,7 @@ async def run_tick(
     samples: SampleStore,
     failures: FailureLog,
     clock: Clock,
+    derivation_store: DerivationStore | None = None,
 ) -> list[bool]:
     """Collect every configured device concurrently for one tick.
 
@@ -131,6 +145,7 @@ async def run_tick(
                 samples=samples,
                 failures=failures,
                 clock=clock,
+                derivation_store=derivation_store,
             )
         except Exception:  # noqa: BLE001 — the final isolation boundary for this tick
             return False
@@ -162,6 +177,7 @@ async def run_forever(
     clock: Clock,
     poll_interval_s: int = 60,
     poll_offset_s: int = 30,
+    derivation_store: DerivationStore | None = None,
 ) -> None:
     """Run one tick per aligned slot, forever, until cancelled.
 
@@ -176,7 +192,13 @@ async def run_forever(
         next_at = next_aligned_slot(clock.now(), interval_s=poll_interval_s, offset_s=poll_offset_s)
         await clock.sleep_until(next_at)
         await run_tick(
-            devices, cloud=cloud, registry=registry, samples=samples, failures=failures, clock=clock
+            devices,
+            cloud=cloud,
+            registry=registry,
+            samples=samples,
+            failures=failures,
+            clock=clock,
+            derivation_store=derivation_store,
         )
 
 

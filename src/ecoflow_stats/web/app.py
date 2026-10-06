@@ -42,6 +42,7 @@ def _start_collector(application: Application) -> SupervisedTaskHandle:
             clock=application.clock,
             poll_interval_s=application.settings.poll_interval,
             poll_offset_s=application.settings.poll_offset,
+            derivation_store=application.derivation_store,
         )
 
     supervised = SupervisedTask(name="collector", target=_run, clock=application.clock)

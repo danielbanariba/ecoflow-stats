@@ -118,11 +118,20 @@ def _resolve_device_id(ctx: ApiContext, requested: int | None) -> int:
     """An explicitly requested, configured device id wins; otherwise the
     first configured device -- the same fallback `web.deps.select_device_id`
     uses for pages, without that function's cookie coupling (this is a
-    stateless JSON API, never a browser session)."""
+    stateless JSON API, never a browser session).
+
+    API-02 (qa-report-data-01.md): an explicitly requested but
+    unrecognized `device` used to silently fall back to the first
+    configured device instead -- a typo'd or stale id in a bookmarked
+    URL or script would return another device's real data under the
+    id a client asked for, with no signal anything was wrong. Now
+    raises a `404` the client can actually detect."""
     device_ids = tuple(record.id for record in ctx.device_records)
-    if requested is not None and requested in device_ids:
-        return requested
-    return device_ids[0]
+    if requested is None:
+        return device_ids[0]
+    if requested not in device_ids:
+        raise HTTPException(status_code=404, detail="unknown device")
+    return requested
 
 
 def _resolve_range(ctx: ApiContext, start: int | None, end: int | None) -> tuple[int, int]:

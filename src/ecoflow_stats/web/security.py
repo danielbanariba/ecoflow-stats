@@ -489,7 +489,28 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             # previous default -- still never a stack trace or
             # internals.
             logger.exception("unhandled exception handling %s %s", request.method, request.url.path)
-            response = PlainTextResponse("Internal Server Error", status_code=500)
+            if request.url.path.startswith(_API_PREFIX):
+                response = PlainTextResponse("Internal Server Error", status_code=500)
+            else:
+                # UI-13 (qa-report-ui-01.md): a page route's own crash
+                # renders the same designed, translated HTML error page
+                # a 404 does, never a bare "Internal Server Error"
+                # plain-text body. Deferred import, not a module-level
+                # one: `web.routes.errors` itself imports this module
+                # for `SecurityContext`/`csrf_token`/`has_valid_session`,
+                # so importing it at module scope here would be a real
+                # cycle; by the time `dispatch` actually runs, both
+                # modules are already fully loaded. Falls back to the
+                # same plain-text body if rendering the error page
+                # itself somehow fails -- this is the last point before
+                # the response leaves the app, so it must not raise.
+                try:
+                    from ecoflow_stats.web.routes.errors import render_error_page
+
+                    response = render_error_page(request, 500)
+                except Exception:
+                    logger.exception("rendering the 500 error page itself failed")
+                    response = PlainTextResponse("Internal Server Error", status_code=500)
         for name, value in _SECURITY_HEADERS.items():
             response.headers[name] = value
         if not request.url.path.startswith(_STATIC_PREFIX):

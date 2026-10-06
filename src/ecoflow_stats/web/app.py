@@ -18,8 +18,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response
 
 from ecoflow_stats.acquisition.collector import run_forever
 from ecoflow_stats.jobs import (
@@ -34,6 +37,7 @@ from ecoflow_stats.storage.outages import OutageStore
 from ecoflow_stats.web.routes.actions import router as actions_router
 from ecoflow_stats.web.routes.api import ApiContext
 from ecoflow_stats.web.routes.api import router as api_router
+from ecoflow_stats.web.routes.errors import render_error_page
 from ecoflow_stats.web.routes.health import HealthContext
 from ecoflow_stats.web.routes.health import router as health_router
 from ecoflow_stats.web.routes.pages import PagesContext
@@ -52,6 +56,27 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
+_API_PREFIX = "/api/"
+"""UI-13: mirrors `web.security`'s own private `_API_PREFIX` exactly
+(same string, same role) -- duplicated rather than imported, the same
+small-constant-duplication precedent `_resolve_device_id` already sets
+across this layer, since `web.security`'s copy is private to that
+module."""
+
+
+async def _handle_http_exception(request: Request, exc: StarletteHTTPException) -> Response:
+    """UI-13 (qa-report-ui-01.md): a `404` on a page route (anything
+    not under `/api/`) renders the same designed, translated HTML page
+    every other page already uses, instead of FastAPI's raw JSON
+    `{"detail": ...}` body. Every other status code (401/403/422 on a
+    page route, and anything at all under `/api/v1/*`) keeps FastAPI's
+    own default JSON handling unchanged -- UI-13 names only `404` here
+    (`500` is handled separately, by `SecurityHeadersMiddleware`'s own
+    crash-catch -- see that class's docstring for why it is not a
+    registered `Exception` handler either)."""
+    if exc.status_code == 404 and not request.url.path.startswith(_API_PREFIX):
+        return render_error_page(request, 404)
+    return await http_exception_handler(request, exc)
 
 
 def _start_collector(application: Application) -> SupervisedTaskHandle:
@@ -247,6 +272,7 @@ def create_app(
             application.run_log.stop(application.run_id, int(application.clock.now().timestamp()))
 
     app = FastAPI(title="ecoflow-stats", lifespan=lifespan)
+    app.add_exception_handler(StarletteHTTPException, _handle_http_exception)
     app.add_middleware(AccessControlMiddleware)
     # Registered last so it wraps outermost: its headers (design,
     # "Headers") reach every response, including a 403/303 that

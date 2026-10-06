@@ -118,5 +118,10 @@
   "battery.trend.table.day": "Day",
   "battery.trend.table.cycles": "Cycles",
   "battery.trend.table.soh": "State of health",
-  "battery.trend.empty": "No rollup data recorded in this range."
+  "battery.trend.empty": "No rollup data recorded in this range.",
+  "error.404.title": "Page not found",
+  "error.404.message": "There's nothing at this address. It may have been moved, or the link may be out of date.",
+  "error.500.title": "Something went wrong",
+  "error.500.message": "An unexpected error occurred while handling this request. Try again in a moment.",
+  "error.back_home": "Back to the overview"
 }

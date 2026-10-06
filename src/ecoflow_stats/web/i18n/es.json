@@ -118,5 +118,10 @@
   "battery.trend.table.day": "Día",
   "battery.trend.table.cycles": "Ciclos",
   "battery.trend.table.soh": "Estado de salud",
-  "battery.trend.empty": "No se registraron datos de resumen en este rango."
+  "battery.trend.empty": "No se registraron datos de resumen en este rango.",
+  "error.404.title": "Página no encontrada",
+  "error.404.message": "No hay nada en esta dirección. Puede que se haya movido, o que el enlace esté desactualizado.",
+  "error.500.title": "Ocurrió un error",
+  "error.500.message": "Ocurrió un error inesperado al procesar esta solicitud. Intente de nuevo en un momento.",
+  "error.back_home": "Volver al resumen"
 }

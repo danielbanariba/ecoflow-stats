@@ -1,5 +1,6 @@
 """Integration tests for `/api/v1/*` input-validation and auth-response
-robustness (QA report `qa-report-data-01.md`, findings API-01 and API-03).
+robustness (QA report `qa-report-data-01.md`, findings API-01, API-02
+and API-03).
 
 API-01: an out-of-range, inverted, or non-numeric `from`/`to` must be
 rejected with a clean `422` JSON error -- never the unhandled
@@ -8,6 +9,12 @@ rejected with a clean `422` JSON error -- never the unhandled
 shared place (`web.routes.api._resolve_range`), so this file exercises a
 handful of representative routes rather than every one, mirroring
 `test_api_grid.py`'s lightweight router-only harness.
+
+API-02: an unrecognized `device` must be rejected with a `404` JSON
+error, never silently fall back to another device's real data under
+the id a client actually asked for. The fix lives in the same shared
+place every `/api/v1/*` route already calls (`_resolve_device_id`), so
+again only a handful of representative routes are exercised here.
 
 API-03: an unauthenticated `/api/v1/*` request on a password-protected
 instance must get a `401` JSON body, not the browser-oriented `303` HTML
@@ -156,6 +163,50 @@ def test_a_non_numeric_from_is_rejected_with_422_not_a_500(tmp_path: Path) -> No
             "/api/v1/battery/series", params={"device": device_id, "from": "not-a-number"}
         )
         assert response.status_code == 422
+    finally:
+        db.close()
+
+
+# --- API-02: an unrecognized device gets 404 JSON, never another's data ----
+
+
+def test_an_unrecognized_device_is_rejected_with_404_not_another_devices_data(
+    tmp_path: Path,
+) -> None:
+    """Pass-1 (API-02): before this fix, `_resolve_device_id` silently
+    fell back to the first configured device for ANY unrecognized
+    `device` -- a typo'd or stale id in a bookmarked URL or script
+    would return a real response full of another device's data under
+    the id the client actually asked for, with nothing in the response
+    to signal the mismatch.
+
+    Pass-2 target: reverting `_resolve_device_id`'s new `404` raise
+    (falling back to `device_ids[0]` for any requested id, as before)
+    turns this red -- the response would be `200` with `device_id`
+    equal to the real, first configured device instead of a `404`."""
+    client, db, device_id = _client(tmp_path)
+    try:
+        response = client.get(
+            "/api/v1/battery/series", params={"device": device_id + 999, "from": 0}
+        )
+        assert response.status_code == 404
+        assert response.json()["detail"]
+    finally:
+        db.close()
+
+
+def test_omitting_device_still_falls_back_to_the_first_configured_device(
+    tmp_path: Path,
+) -> None:
+    """Regression guard: API-02's fix must only reject an explicitly
+    requested, unrecognized device -- a request with no `device` at
+    all (the common single-device case) must keep falling back to the
+    first configured device, exactly as before."""
+    client, db, device_id = _client(tmp_path)
+    try:
+        response = client.get("/api/v1/battery/series", params={"from": 0})
+        assert response.status_code == 200
+        assert response.json()["device_id"] == device_id
     finally:
         db.close()
 

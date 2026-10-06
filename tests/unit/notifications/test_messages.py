@@ -33,6 +33,7 @@ def test_start_message_renders_in_the_configured_language() -> None:
     assert "97%" in en.body
     assert "97%" in es.body
     assert "14:30" in en.body
+    assert en.kind == "start"
 
 
 def test_end_message_includes_duration_and_end_of_outage_charge() -> None:
@@ -52,6 +53,7 @@ def test_end_message_includes_duration_and_end_of_outage_charge() -> None:
 
     assert "42%" in message.body
     assert "8 h 32 min" in message.body
+    assert message.kind == "end"
 
 
 def test_a_brief_drops_end_message_says_lasted_under_two_minutes() -> None:

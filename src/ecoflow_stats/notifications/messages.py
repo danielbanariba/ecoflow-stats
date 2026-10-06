@@ -40,6 +40,11 @@ class Message:
 
     title: str
     body: str
+    kind: Kind | None = None
+    """`None` only for a `Message` built outside `start_message`/
+    `end_message` (for example, a test constructing one directly); the
+    `ntfy` adapter uses it to pick the matching Priority/Tags (design-edges
+    section 3: start is `high` priority, end is `default`)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +87,7 @@ def start_message(
     if event.dsg_remain_min_start is not None:
         remaining = _format_duration(event.dsg_remain_min_start * 60)
         parts.append(f"about {remaining} left" if lang == "en" else f"quedan unos {remaining}")
-    return Message(title=title, body=" · ".join(parts))
+    return Message(title=title, body=" · ".join(parts), kind="start")
 
 
 def end_message(
@@ -113,7 +118,7 @@ def end_message(
         duration = _format_duration(event.end_ts - event.start_ts)
         clause = f"lasted {duration}" if lang == "en" else f"duró {duration}"
     parts.append(clause)
-    return Message(title=title, body=" · ".join(parts))
+    return Message(title=title, body=" · ".join(parts), kind="end")
 
 
 __all__ = ["AlertKey", "Kind", "Lang", "Message", "PendingAlert", "end_message", "start_message"]

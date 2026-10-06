@@ -8,12 +8,12 @@
   Context: `entry` (a `storage.legacy.LegacyOutage`), `device_id`,
   `tz`, `t`, and `decision` (`None`, or `{"id": int, "verdict": str}`).
 #}
-<article class="legacy-row" data-legacy-start="{{ entry.start_ts }}">
+<article class="review-row reveal is-visible" data-legacy-start="{{ entry.start_ts }}">
   <h3>
     {{ format_local_dt(entry.start_ts, tz) }} –
     {% if entry.end_ts is not none %}{{ format_local_dt(entry.end_ts, tz) }}{% else %}{{ t('outages.table.ongoing') }}{% endif %}
   </h3>
-  <p class="legacy-row__status">
+  <p class="review-row__decision">
     {% if decision is not none and decision.verdict == 'real' %}
       {{ t('outages.legacy_review.confirmed_real') }}
     {% elif 'suspected_phantom' in entry.flags %}
@@ -24,7 +24,7 @@
   </p>
   {% if decision is none %}
   <form
-    class="legacy-row__action"
+    class="review-row__actions"
     method="post"
     action="/outages/legacy/{{ entry.start_ts }}/decision"
     hx-post="/outages/legacy/{{ entry.start_ts }}/decision"
@@ -33,11 +33,11 @@
   >
     <input type="hidden" name="device" value="{{ device_id }}">
     <input type="hidden" name="verdict" value="real">
-    <button type="submit">{{ t('outages.legacy_review.mark_real_button') }}</button>
+    <button type="submit" class="btn btn--ghost">{{ t('outages.legacy_review.mark_real_button') }}</button>
   </form>
   {% else %}
   <form
-    class="legacy-row__action"
+    class="review-row__actions"
     method="post"
     action="/decisions/{{ decision.id }}/undo"
     hx-post="/decisions/{{ decision.id }}/undo"
@@ -47,7 +47,7 @@
     <input type="hidden" name="device" value="{{ device_id }}">
     <input type="hidden" name="target" value="legacy">
     <input type="hidden" name="start" value="{{ entry.start_ts }}">
-    <button type="submit">{{ t('outages.legacy_review.undo_button') }}</button>
+    <button type="submit" class="btn btn--ghost">{{ t('outages.legacy_review.undo_button') }}</button>
   </form>
   {% endif %}
 </article>

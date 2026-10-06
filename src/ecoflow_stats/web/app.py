@@ -31,7 +31,12 @@ from ecoflow_stats.web.routes.health import HealthContext
 from ecoflow_stats.web.routes.health import router as health_router
 from ecoflow_stats.web.routes.pages import PagesContext
 from ecoflow_stats.web.routes.pages import router as pages_router
-from ecoflow_stats.web.security import AccessControlMiddleware, LoginThrottle, SecurityContext
+from ecoflow_stats.web.security import (
+    AccessControlMiddleware,
+    LoginThrottle,
+    SecurityContext,
+    SecurityHeadersMiddleware,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -191,6 +196,10 @@ def create_app(
 
     app = FastAPI(title="ecoflow-stats", lifespan=lifespan)
     app.add_middleware(AccessControlMiddleware)
+    # Registered last so it wraps outermost: its headers (design,
+    # "Headers") reach every response, including a 403/303 that
+    # AccessControlMiddleware itself returns before routing even runs.
+    app.add_middleware(SecurityHeadersMiddleware)
     app.include_router(health_router)
     app.include_router(api_router)
     app.include_router(pages_router)

@@ -11,10 +11,12 @@ Two trust models, selected by whether `ECOFLOW_STATS_PASSWORD` is set:
   except the health check, the login page, and static assets requires a
   valid session, issued only by the exact configured password.
 
-CSRF and security headers (the design's other half of this section) are
-a separate later slice (Phase 14 PR ii) and are not implemented here;
-the one dependency it introduces (`require_csrf`) composes independently
-of everything below, so nothing here needs reshaping to add it.
+CSRF and security headers (the design's other half of this section,
+Phase 14 PR ii) are implemented below: `require_csrf` is a separate
+FastAPI dependency, attached per-POST-route rather than folded into
+`AccessControlMiddleware`, and `SecurityHeadersMiddleware` is its own
+middleware registered outermost in `app.py` -- neither needed any change
+to the LAN-guard/session halves above.
 """
 
 from __future__ import annotations
@@ -24,24 +26,41 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import secrets
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
+from fastapi import HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from starlette.requests import Request
     from starlette.responses import Response
     from starlette.types import ASGIApp
 
 SESSION_COOKIE = "efs_session"
+CSRF_COOKIE = "efs_csrf"
+CSRF_HEADER = "x-csrf-token"
+CSRF_FORM_FIELD = "csrf_token"
 _HEALTH_CHECK_PATH = "/healthz"
 _LOGIN_PATH = "/login"
 _STATIC_PREFIX = "/static/"
+_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self'; "
+    "img-src 'self' data:; connect-src 'self'; font-src 'self'; "
+    "object-src 'none'; base-uri 'self'; form-action 'self'; "
+    "frame-ancestors 'none'"
+)
+_SECURITY_HEADERS = {
+    "content-security-policy": _CSP,
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "same-origin",
+}
 
 
 def client_in_allowed_networks(host: str | None, networks: Sequence[str]) -> bool:
@@ -245,19 +264,131 @@ class AccessControlMiddleware(BaseHTTPMiddleware):
         return RedirectResponse(url=f"{_LOGIN_PATH}?next={request.url.path}", status_code=303)
 
 
+def new_csrf_secret() -> str:
+    """A fresh random value for the `efs_csrf` cookie (design, "CSRF")."""
+    return secrets.token_urlsafe(32)
+
+
+def csrf_token(app_secret: bytes, cookie_value: str) -> str:
+    """`HMAC(secret, cookie)` (design, "CSRF"): the value a page hands
+    back to the client (a hidden field, or `hx-headers` on `<body>`) to
+    prove it actually read the cookie's value -- something a forged
+    cross-site page cannot do, since the cookie is `HttpOnly`."""
+    return hmac.new(app_secret, cookie_value.encode("ascii"), hashlib.sha256).hexdigest()
+
+
+def csrf_cookie_value(request: Request) -> tuple[str, bool]:
+    """The request's existing `efs_csrf` cookie value, or a freshly
+    minted one if it didn't carry one yet. The second element is whether
+    a fresh value was minted, so the caller knows whether to actually set
+    it on its response (`set_csrf_cookie`) -- split from that step so a
+    route can compute the token for its template context before the
+    `Response` object exists."""
+    value = request.cookies.get(CSRF_COOKIE)
+    if value is None:
+        return new_csrf_secret(), True
+    return value, False
+
+
+def set_csrf_cookie(response: Response, value: str, *, secure: bool) -> None:
+    response.set_cookie(CSRF_COOKIE, value, httponly=True, samesite="strict", secure=secure)
+
+
+async def _submitted_csrf_token(request: Request) -> str | None:
+    header = request.headers.get(CSRF_HEADER)
+    if header is not None:
+        return header
+    form = await request.form()
+    value = form.get(CSRF_FORM_FIELD)
+    return value if isinstance(value, str) else None
+
+
+async def require_csrf(request: Request) -> None:
+    """FastAPI dependency: the CSRF half of the design's "Access control"
+    section (Named Defect "CSRF gap"). Deliberately a dependency, not
+    part of `AccessControlMiddleware` (per the slice-21 handoff note), so
+    it composes independently of the LAN-guard/session halves above --
+    attach it to each POST route instead.
+
+    Rejects a present `Origin` whose host differs from `Host`, and a
+    `Sec-Fetch-Site` other than `same-origin`/`none` -- the two signals a
+    modern browser already attaches to a genuine cross-site request,
+    regardless of any token. When a token *is* submitted (as the
+    `X-CSRF-Token` header or a `csrf_token` form field), it must match
+    `csrf_token(app_secret, <the efs_csrf cookie>)` exactly; a
+    present-but-wrong token is always rejected, which is what an actual
+    forged submission -- one that cannot read the `HttpOnly` cookie to
+    compute a matching value -- looks like.
+
+    **Documented deviation**: a request presenting neither of the two
+    header signals above nor any token at all is let through. No current
+    template renders the hidden field or `hx-headers` yet (template
+    edits were outside this slice's allowed surface), so every existing
+    same-origin request -- real or test-driven -- looks exactly this way;
+    the Origin/Sec-Fetch-Site checks remain the enforced guard against an
+    actual modern-browser forgery in the meantime. See
+    `sdd/stats-app-v1/apply-progress-batch12` for the full reasoning.
+    """
+    security: SecurityContext = request.app.state.security
+    host = (request.headers.get("host") or "").lower()
+    origin = request.headers.get("origin")
+    if origin is not None and urlsplit(origin).netloc.lower() != host:
+        raise HTTPException(status_code=403, detail="cross-site request rejected")
+
+    sec_fetch_site = request.headers.get("sec-fetch-site")
+    if sec_fetch_site is not None and sec_fetch_site not in ("same-origin", "none"):
+        raise HTTPException(status_code=403, detail="cross-site request rejected")
+
+    submitted = await _submitted_csrf_token(request)
+    if submitted is None:
+        return
+
+    cookie_value = request.cookies.get(CSRF_COOKIE)
+    if cookie_value is None or not hmac.compare_digest(
+        submitted, csrf_token(security.app_secret, cookie_value)
+    ):
+        raise HTTPException(status_code=403, detail="invalid CSRF token")
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Attaches the CSP and related headers (design, "Headers") to every
+    response, including the LAN-guard/login-redirect responses
+    `AccessControlMiddleware` itself returns -- kept as its own
+    middleware, registered outermost in `app.py`, rather than reshaping
+    that existing middleware."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        super().__init__(app)
+
+    async def dispatch(self, request: Request, call_next: object) -> Response:
+        response = await call_next(request)
+        for name, value in _SECURITY_HEADERS.items():
+            response.headers[name] = value
+        return response
+
+
 __all__ = [
+    "CSRF_COOKIE",
+    "CSRF_FORM_FIELD",
+    "CSRF_HEADER",
     "SESSION_COOKIE",
     "AccessControlMiddleware",
     "LoginThrottle",
     "SecurityContext",
+    "SecurityHeadersMiddleware",
     "clear_session_cookie",
     "client_in_allowed_networks",
+    "csrf_cookie_value",
+    "csrf_token",
     "has_valid_session",
     "issue_session_cookie",
     "issue_session_token",
     "lan_denied_response",
+    "new_csrf_secret",
+    "require_csrf",
     "safe_next_path",
     "session_signing_key",
+    "set_csrf_cookie",
     "verify_password",
     "verify_session_token",
 ]

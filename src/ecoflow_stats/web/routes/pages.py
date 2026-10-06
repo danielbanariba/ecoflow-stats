@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -26,8 +26,12 @@ from ecoflow_stats.web.i18n import SUPPORTED_LANGS, load_catalogs, translator
 from ecoflow_stats.web.security import (
     SecurityContext,
     clear_session_cookie,
+    csrf_cookie_value,
+    csrf_token,
     issue_session_cookie,
+    require_csrf,
     safe_next_path,
+    set_csrf_cookie,
     verify_password,
 )
 from ecoflow_stats.web.views import build_overview_view_model
@@ -96,9 +100,11 @@ def _live_view(ctx: PagesContext, device_id: int) -> object:
 @router.get("/", response_class=HTMLResponse)
 def overview_page(request: Request, device: int | None = None) -> HTMLResponse:
     ctx: PagesContext = request.app.state.pages
+    security: SecurityContext = request.app.state.security
     lang = _resolve_lang(request, ctx)
     selected_id = _resolve_device(request, ctx, device)
     view = _live_view(ctx, selected_id)
+    csrf_cookie, csrf_cookie_is_new = csrf_cookie_value(request)
     response = TEMPLATES.TemplateResponse(
         request,
         "overview.html",
@@ -107,9 +113,12 @@ def overview_page(request: Request, device: int | None = None) -> HTMLResponse:
             "lang": lang,
             "html_lang": html_lang(lang),
             "view": view,
+            "csrf_token": csrf_token(security.app_secret, csrf_cookie),
         },
     )
     response.set_cookie(DEVICE_COOKIE, str(selected_id), max_age=_COOKIE_MAX_AGE_S, samesite="lax")
+    if csrf_cookie_is_new:
+        set_csrf_cookie(response, csrf_cookie, secure=request.url.scheme == "https")
     return response
 
 
@@ -124,7 +133,7 @@ def live_partial(request: Request, device: int | None = None) -> HTMLResponse:
     )
 
 
-@router.post("/preferences")
+@router.post("/preferences", dependencies=[Depends(require_csrf)])
 def set_preferences(request: Request, lang: str = Form(...)) -> RedirectResponse:
     """web-ui "Manual Language Override Persists": a POST here sets the
     `lang` cookie directly, which outranks the negotiated
@@ -144,8 +153,10 @@ def login_page(request: Request, next: str | None = None, error: bool = False) -
     Health Check": the page `AccessControlMiddleware` redirects an
     unauthenticated request to."""
     ctx: PagesContext = request.app.state.pages
+    security: SecurityContext = request.app.state.security
     lang = _resolve_lang(request, ctx)
-    return TEMPLATES.TemplateResponse(
+    csrf_cookie, csrf_cookie_is_new = csrf_cookie_value(request)
+    response = TEMPLATES.TemplateResponse(
         request,
         "login.html",
         {
@@ -154,11 +165,15 @@ def login_page(request: Request, next: str | None = None, error: bool = False) -
             "html_lang": html_lang(lang),
             "next": safe_next_path(next),
             "error": error,
+            "csrf_token": csrf_token(security.app_secret, csrf_cookie),
         },
     )
+    if csrf_cookie_is_new:
+        set_csrf_cookie(response, csrf_cookie, secure=request.url.scheme == "https")
+    return response
 
 
-@router.post("/login")
+@router.post("/login", dependencies=[Depends(require_csrf)])
 def login_submit(
     request: Request, password: str = Form(...), next: str = Form("/")
 ) -> RedirectResponse:
@@ -176,7 +191,7 @@ def login_submit(
     return RedirectResponse(url=f"/login?next={target}&error=1", status_code=303)
 
 
-@router.post("/logout")
+@router.post("/logout", dependencies=[Depends(require_csrf)])
 def logout_submit() -> RedirectResponse:
     response = RedirectResponse(url="/login", status_code=303)
     clear_session_cookie(response)

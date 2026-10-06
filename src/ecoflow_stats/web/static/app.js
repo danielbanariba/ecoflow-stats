@@ -177,14 +177,37 @@ const CHART_COLOR = {
   splitLine: "rgba(255,255,255,0.06)",
 };
 
+// UI-07 (qa-report-ui-01.md): the browser's own console showed a real
+// `style-src 'self'` CSP violation every time a tooltip appeared --
+// ECharts' default "html" tooltip renders a floating `<div>` and sets
+// its background/position/`extraCssText` via `el.style.cssText = ...`,
+// which is just as governed by `style-src` as a literal `style="..."`
+// attribute. `renderMode: "richText"` switches the tooltip to the same
+// zrender/SVG painter the chart itself already uses (`renderer: "svg"`
+// below) -- the tooltip becomes drawn SVG content, not a styled DOM
+// node, so there is no `style` attribute left for the CSP to block.
+// The one real cost: richText tooltips are canvas/SVG-painted boxes,
+// so CSS `backdrop-filter` blur (the glass look) cannot be reproduced;
+// `shadowBlur`/`shadowColor` approximate the card's own elevation
+// instead, and `borderColor`/`borderWidth` replace the lost border.
+// `extraCssText` (the actual CSP offender) is dropped, never ported.
+const CHART_TOOLTIP_RICH = { b: { fontWeight: 700 } };
+
 const CHART_TOOLTIP_BASE = {
-  backgroundColor: "rgba(22,22,26,0.88)",
-  borderWidth: 0,
+  renderMode: "richText",
+  backgroundColor: "rgba(22,22,26,0.92)",
+  borderColor: "rgba(255,255,255,0.08)",
+  borderWidth: 1,
   borderRadius: 14,
   padding: [10, 14],
-  textStyle: { color: CHART_COLOR.text, fontFamily: "Inter, sans-serif", fontSize: 12 },
-  extraCssText:
-    "backdrop-filter: blur(16px) saturate(160%); -webkit-backdrop-filter: blur(16px) saturate(160%); box-shadow: 0 20px 48px -12px rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.08);",
+  shadowBlur: 24,
+  shadowColor: "rgba(0,0,0,0.5)",
+  textStyle: {
+    color: CHART_COLOR.text,
+    fontFamily: "Inter, sans-serif",
+    fontSize: 12,
+    rich: CHART_TOOLTIP_RICH,
+  },
 };
 
 function chartGradient(colorTop, colorBottom) {
@@ -238,7 +261,7 @@ function initHeatmapChart(el) {
         const [x, y, v] = p.data;
         const isHour = y === 0;
         const label = isHour ? x + ":00" : data.weekday_labels ? data.weekday_labels[x] : x;
-        return label + "<br/><strong>" + v + "</strong>";
+        return label + "\n{b|" + v + "}";
       },
     },
     grid: { containLabel: true, left: 8, right: 8, top: 8, bottom: narrow ? 8 : 24 },
@@ -322,7 +345,7 @@ function initMainsStripChart(el) {
             const [start, end, state] = p.data.value;
             const fmt = (ts) =>
               new Date(ts).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-            return fmt(start) + " – " + fmt(end) + "<br/><strong>" + state + "</strong>";
+            return fmt(start) + " – " + fmt(end) + "\n{b|" + state + "}";
           },
         },
         grid: { left: 8, right: 8, top: 16, bottom: 28, containLabel: true },
@@ -395,7 +418,7 @@ function initSocLineChart(el) {
             const p = params[0];
             return (
               new Date(p.data[0]).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) +
-              "<br/><strong>" + p.data[1] + "%</strong>"
+              "\n{b|" + p.data[1] + "%}"
             );
           },
         },

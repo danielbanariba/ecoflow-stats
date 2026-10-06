@@ -22,6 +22,7 @@ from ecoflow_stats.config import load_settings
 from ecoflow_stats.devices.reading import Reading
 from ecoflow_stats.jobs import SupervisedTask, SupervisedTaskHandle
 from ecoflow_stats.web.app import create_app
+from ecoflow_stats.web.security import CSRF_COOKIE, csrf_token
 from tests.fakes import FakeClock
 
 _NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
@@ -108,7 +109,12 @@ def test_the_spanish_catalog_reaches_the_new_overview_strings(
         (device,) = application.device_records
         application.sample_store.add(device.id, _NOW_TS - 10, 1, Reading(grid_v=120.0, soc=50))
         with _client(application) as client:
-            client.post("/preferences", data={"lang": "es"}, follow_redirects=False)
+            client.get("/")  # mints the real efs_csrf cookie
+            headers = {"x-csrf-token": csrf_token(application.secret, client.cookies[CSRF_COOKIE])}
+            preferences_response = client.post(
+                "/preferences", data={"lang": "es"}, headers=headers, follow_redirects=False
+            )
+            assert preferences_response.status_code == 303  # accepted, not CSRF-rejected
             html = client.get("/").text
 
         assert "Red" in html  # live.grid_label (es)

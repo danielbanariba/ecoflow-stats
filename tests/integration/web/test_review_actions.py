@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from ecoflow_stats.storage.imports import ImportRunStore
 from ecoflow_stats.storage.legacy import LegacyStore
 from ecoflow_stats.storage.outages import OutageStore
 from ecoflow_stats.web.app import create_app
+from ecoflow_stats.web.security import CSRF_COOKIE, csrf_token
 from tests.fakes import FakeClock
 
 _NOW = datetime(2026, 1, 10, 0, 0, tzinfo=UTC)
@@ -98,6 +100,17 @@ def _client(
         start_rollups_job=_never_ticks,
     )
     return application, device.id, TestClient(app)
+
+
+def _csrf_headers(client: TestClient, application: bootstrap.Application) -> dict[str, str]:
+    """SEC-01 made `require_csrf` fail closed: every mutating POST in
+    this file now needs real CSRF proof. Mints the cookie via the
+    overview page (`/`, wired since batch12, unaffected by this
+    slice's own outages/battery-page changes) rather than `/outages`,
+    so this helper's correctness never depends on the very fix it is
+    exercising."""
+    client.get("/")
+    return {"x-csrf-token": csrf_token(application.secret, client.cookies[CSRF_COOKIE])}
 
 
 def _seed_legacy_phantom(application: bootstrap.Application, device_id: int, start_ts: int) -> None:
@@ -178,6 +191,7 @@ def test_confirming_a_gap_persists_the_outage_verdict_and_returns_the_updated_ro
             response = client.post(
                 f"/outages/gaps/{gap_start}/decision",
                 data={"device": device_id, "verdict": "outage"},
+                headers=_csrf_headers(client, application),
             )
 
         assert response.status_code == 200
@@ -209,6 +223,7 @@ def test_rejecting_a_gap_persists_the_no_outage_verdict(
             response = client.post(
                 f"/outages/gaps/{gap_start}/decision",
                 data={"device": device_id, "verdict": "no_outage"},
+                headers=_csrf_headers(client, application),
             )
 
         assert response.status_code == 200
@@ -235,15 +250,18 @@ def test_undo_reverts_a_gap_decision_to_its_prior_unresolved_state(
     )
     try:
         with client:
+            headers = _csrf_headers(client, application)
             confirm = client.post(
                 f"/outages/gaps/{gap_start}/decision",
                 data={"device": device_id, "verdict": "outage"},
+                headers=headers,
             )
             decision_id = DecisionStore(application.database.writer).active(device_id)[0].id
 
             undo_response = client.post(
                 f"/decisions/{decision_id}/undo",
                 data={"device": device_id, "target": "gap", "start": gap_start},
+                headers=headers,
             )
 
         assert confirm.status_code == 200
@@ -271,6 +289,7 @@ def test_unflagging_a_suspected_phantom_shows_it_as_confirmed_real(
             response = client.post(
                 f"/outages/legacy/{legacy_start}/decision",
                 data={"device": device_id, "verdict": "real"},
+                headers=_csrf_headers(client, application),
             )
 
         assert response.status_code == 200
@@ -305,10 +324,50 @@ def test_a_decision_for_a_non_matching_gap_start_is_rejected_without_recording_a
             response = client.post(
                 f"/outages/gaps/{requested_start}/decision",
                 data={"device": device_id, "verdict": "outage"},
+                headers=_csrf_headers(client, application),
             )
 
         assert response.status_code == 404
         assert DecisionStore(application.database.writer).active(device_id) == []
+    finally:
+        application.database.close()
+
+
+def test_the_gap_review_rows_own_rendered_csrf_field_is_accepted_when_submitted_back(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """SEC-01 (qa-report-data-01.md): this is the report's own exact
+    repro route (`POST /outages/gaps/{gap_start}/decision`), replayed
+    through the legitimate UI path instead of a hand-crafted header --
+    scraping the real token `gap_row.html`'s own confirm form rendered,
+    not one computed independently, so a regression that drops the
+    hidden field from that specific template (while `base.html`'s nav
+    forms and `login.html` stay untouched) is caught here and nowhere
+    else. Also proves the fix does not just block forgeries but leaves
+    the real gap-review feature working end-to-end."""
+    gap_start = _RANGE_START + 9_000
+    application, device_id, client = _client(
+        monkeypatch, tmp_path, gaps=[_gap(gap_start, gap_start + 90)]
+    )
+    try:
+        with client:
+            list_html = client.get(f"/outages/gaps?device={device_id}").text
+            match = re.search(r'name="csrf_token" value="([^"]+)"', list_html)
+            assert match is not None, "gap_row.html rendered no csrf_token field"
+            token = match.group(1)
+
+            response = client.post(
+                f"/outages/gaps/{gap_start}/decision",
+                data={"device": device_id, "verdict": "outage", "csrf_token": token},
+            )
+
+        assert response.status_code == 200
+        assert response.headers.get("hx-trigger") == "outages-changed"
+        assert "Confirmed as an outage" in response.text
+
+        decisions = DecisionStore(application.database.writer).active(device_id)
+        assert len(decisions) == 1
+        assert decisions[0].verdict == "outage"
     finally:
         application.database.close()
 

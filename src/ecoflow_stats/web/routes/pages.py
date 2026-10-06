@@ -173,8 +173,10 @@ def outages_page(
     already uses for `request.app.state.security`."""
     ctx: PagesContext = request.app.state.pages
     api_ctx = request.app.state.api
+    security: SecurityContext = request.app.state.security
     lang = _resolve_lang(request, ctx)
     selected_id = _resolve_device(request, ctx, device)
+    csrf_cookie, csrf_cookie_is_new = csrf_cookie_value(request)
 
     range_end = end if end is not None else int(ctx.now().timestamp())
     range_start = start if start is not None else range_end - _OUTAGES_DEFAULT_RANGE_S
@@ -212,9 +214,12 @@ def outages_page(
             "view": view_model,
             "tz": api_ctx.tz,
             "active_nav": "outages",
+            "csrf_token": csrf_token(security.app_secret, csrf_cookie),
         },
     )
     response.set_cookie(DEVICE_COOKIE, str(selected_id), max_age=_COOKIE_MAX_AGE_S, samesite="lax")
+    if csrf_cookie_is_new:
+        set_csrf_cookie(response, csrf_cookie, secure=request.url.scheme == "https")
     return response
 
 
@@ -259,8 +264,10 @@ def battery_page(
     -- the same restriction `web.routes.api.battery_outages_route`
     documents."""
     ctx: PagesContext = request.app.state.pages
+    security: SecurityContext = request.app.state.security
     lang = _resolve_lang(request, ctx)
     selected_id = _resolve_device(request, ctx, device)
+    csrf_cookie, csrf_cookie_is_new = csrf_cookie_value(request)
 
     range_end = end if end is not None else int(ctx.now().timestamp())
     range_start = start if start is not None else range_end - _BATTERY_DEFAULT_RANGE_S
@@ -310,9 +317,12 @@ def battery_page(
             "view": view_model,
             "tz": request.app.state.api.tz,
             "active_nav": "battery",
+            "csrf_token": csrf_token(security.app_secret, csrf_cookie),
         },
     )
     response.set_cookie(DEVICE_COOKIE, str(selected_id), max_age=_COOKIE_MAX_AGE_S, samesite="lax")
+    if csrf_cookie_is_new:
+        set_csrf_cookie(response, csrf_cookie, secure=request.url.scheme == "https")
     return response
 
 

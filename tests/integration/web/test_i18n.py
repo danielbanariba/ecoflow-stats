@@ -21,6 +21,7 @@ from ecoflow_stats import bootstrap
 from ecoflow_stats.config import load_settings
 from ecoflow_stats.jobs import SupervisedTask, SupervisedTaskHandle
 from ecoflow_stats.web.app import create_app
+from ecoflow_stats.web.security import CSRF_COOKIE, csrf_token
 from tests.fakes import FakeClock
 
 _NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
@@ -106,7 +107,15 @@ def test_a_manual_override_replaces_the_negotiated_language_for_the_session(
     try:
         with client:
             client.get("/", headers={"accept-language": "es-HN,es;q=0.9"})
-            client.post("/preferences", data={"lang": "en"}, headers={"accept-language": "es-HN"})
+            csrf_header = {
+                "x-csrf-token": csrf_token(application.secret, client.cookies[CSRF_COOKIE])
+            }
+            preferences_response = client.post(
+                "/preferences",
+                data={"lang": "en"},
+                headers={**csrf_header, "accept-language": "es-HN"},
+            )
+            assert preferences_response.status_code == 200  # redirect followed, not a 403
             response = client.get("/", headers={"accept-language": "es-HN,es;q=0.9"})
 
         assert 'lang="en"' in response.text

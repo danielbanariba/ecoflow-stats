@@ -36,6 +36,7 @@ from ecoflow_stats.config import load_settings
 from ecoflow_stats.jobs import SupervisedTask, SupervisedTaskHandle
 from ecoflow_stats.logs import configure_logging
 from ecoflow_stats.web.app import create_app
+from ecoflow_stats.web.security import CSRF_COOKIE, csrf_token
 from tests.fakes import FakeClock
 
 _NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
@@ -163,8 +164,13 @@ def test_an_authenticated_overview_page_never_shows_the_configured_password(
             start_rollups_job=_never_ticks,
         )
 
-        with TestClient(app) as client:
-            client.post("/login", data={"password": _PASSWORD, "next": "/"})
+        with TestClient(app, follow_redirects=False) as client:
+            client.get("/login")  # mints the real efs_csrf cookie
+            headers = {"x-csrf-token": csrf_token(application.secret, client.cookies[CSRF_COOKIE])}
+            login_response = client.post(
+                "/login", data={"password": _PASSWORD, "next": "/"}, headers=headers
+            )
+            assert login_response.status_code == 303  # a real session was actually granted
             home = client.get("/")
 
         assert home.status_code == 200

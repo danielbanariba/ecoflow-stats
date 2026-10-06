@@ -33,6 +33,7 @@
   >
     <input type="hidden" name="device" value="{{ device_id }}">
     <input type="hidden" name="verdict" value="real">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit" class="btn btn--ghost">{{ t('outages.legacy_review.mark_real_button') }}</button>
   </form>
   {% else %}
@@ -47,6 +48,7 @@
     <input type="hidden" name="device" value="{{ device_id }}">
     <input type="hidden" name="target" value="legacy">
     <input type="hidden" name="start" value="{{ entry.start_ts }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit" class="btn btn--ghost">{{ t('outages.legacy_review.undo_button') }}</button>
   </form>
   {% endif %}

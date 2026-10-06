@@ -50,6 +50,7 @@
     >
       <input type="hidden" name="device" value="{{ device_id }}">
       <input type="hidden" name="verdict" value="outage">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button type="submit" class="btn btn--ghost">{{ t('outages.gap_review.confirm_button') }}</button>
     </form>
     <form
@@ -61,6 +62,7 @@
     >
       <input type="hidden" name="device" value="{{ device_id }}">
       <input type="hidden" name="verdict" value="no_outage">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button type="submit" class="btn btn--ghost">{{ t('outages.gap_review.reject_button') }}</button>
     </form>
   </div>
@@ -77,6 +79,7 @@
     <input type="hidden" name="device" value="{{ device_id }}">
     <input type="hidden" name="target" value="gap">
     <input type="hidden" name="start" value="{{ gap.start_ts }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit" class="btn btn--ghost">{{ t('outages.gap_review.undo_button') }}</button>
   </form>
   {% endif %}

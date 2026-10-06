@@ -21,7 +21,9 @@ from ecoflow_stats.config import load_settings
 from ecoflow_stats.jobs import SupervisedTask, SupervisedTaskHandle
 from ecoflow_stats.web.app import create_app
 from ecoflow_stats.web.security import (
+    CSRF_COOKIE,
     LoginThrottle,
+    csrf_token,
     issue_session_token,
     session_signing_key,
     verify_session_token,
@@ -31,6 +33,15 @@ from tests.fakes import FakeClock
 _NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 _PASSWORD = "correct-password-1"
 _LOCAL_CLIENT = ("127.0.0.1", 12345)
+
+
+def _csrf_headers(client: TestClient, application: bootstrap.Application) -> dict[str, str]:
+    """SEC-01 made `require_csrf` fail closed: every `/login` POST in
+    this file now needs real CSRF proof, exactly like the rendered
+    `login.html` page provides -- a GET first mints the real `efs_csrf`
+    cookie, and the header is computed from that exact value."""
+    client.get("/login")
+    return {"x-csrf-token": csrf_token(application.secret, client.cookies[CSRF_COOKIE])}
 
 
 @pytest.fixture(autouse=True)
@@ -129,7 +140,11 @@ def test_the_correct_password_is_accepted_and_grants_a_session(
         )
 
         with TestClient(app, client=_LOCAL_CLIENT) as client:
-            login_response = client.post("/login", data={"password": _PASSWORD, "next": "/"})
+            login_response = client.post(
+                "/login",
+                data={"password": _PASSWORD, "next": "/"},
+                headers=_csrf_headers(client, application),
+            )
             assert login_response.status_code == 200  # followed the redirect to "/"
 
             home_response = client.get("/")
@@ -153,9 +168,14 @@ def test_a_wrong_password_grants_no_session(
         )
 
         with TestClient(app, client=_LOCAL_CLIENT, follow_redirects=False) as client:
-            client.post("/login", data={"password": "totally-wrong", "next": "/"})
+            login_response = client.post(
+                "/login",
+                data={"password": "totally-wrong", "next": "/"},
+                headers=_csrf_headers(client, application),
+            )
             response = client.get("/")
 
+        assert login_response.status_code == 303  # rejected by password check, not CSRF
         assert response.status_code == 303  # still no session
     finally:
         application.database.close()
@@ -177,8 +197,13 @@ def test_session_cookie_is_httponly_and_samesite_lax(
         )
 
         with TestClient(app, client=_LOCAL_CLIENT, follow_redirects=False) as client:
-            response = client.post("/login", data={"password": _PASSWORD, "next": "/"})
+            response = client.post(
+                "/login",
+                data={"password": _PASSWORD, "next": "/"},
+                headers=_csrf_headers(client, application),
+            )
 
+        assert response.status_code == 303  # a real session was actually granted
         set_cookie = response.headers.get("set-cookie", "").lower()
         assert "efs_session=" in set_cookie
         assert "httponly" in set_cookie
@@ -203,8 +228,9 @@ def test_a_wrong_password_attempt_is_really_delayed_by_the_real_login_route(
         )
 
         with TestClient(app, client=_LOCAL_CLIENT) as client:
+            headers = _csrf_headers(client, application)  # minted before timing starts
             started = time.monotonic()
-            client.post("/login", data={"password": "totally-wrong", "next": "/"})
+            client.post("/login", data={"password": "totally-wrong", "next": "/"}, headers=headers)
             elapsed = time.monotonic() - started
 
         assert elapsed >= 1.0

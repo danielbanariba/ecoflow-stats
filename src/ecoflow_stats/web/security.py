@@ -328,21 +328,22 @@ async def require_csrf(request: Request) -> None:
     Rejects a present `Origin` whose host differs from `Host`, and a
     `Sec-Fetch-Site` other than `same-origin`/`none` -- the two signals a
     modern browser already attaches to a genuine cross-site request,
-    regardless of any token. When a token *is* submitted (as the
-    `X-CSRF-Token` header or a `csrf_token` form field), it must match
-    `csrf_token(app_secret, <the efs_csrf cookie>)` exactly; a
-    present-but-wrong token is always rejected, which is what an actual
-    forged submission -- one that cannot read the `HttpOnly` cookie to
-    compute a matching value -- looks like.
+    regardless of any token. A token (the `X-CSRF-Token` header or a
+    `csrf_token` form field) is now always required and must match
+    `csrf_token(app_secret, <the efs_csrf cookie>)` exactly.
 
-    **Documented deviation**: a request presenting neither of the two
-    header signals above nor any token at all is let through. No current
-    template renders the hidden field or `hx-headers` yet (template
-    edits were outside this slice's allowed surface), so every existing
-    same-origin request -- real or test-driven -- looks exactly this way;
-    the Origin/Sec-Fetch-Site checks remain the enforced guard against an
-    actual modern-browser forgery in the meantime. See
-    `sdd/stats-app-v1/apply-progress-batch12` for the full reasoning.
+    **SEC-01 fix** (qa-report-data-01.md): the earlier version let a
+    request through whenever it submitted *no* token at all, falling
+    back entirely to the Origin/Sec-Fetch-Site heuristic above -- which
+    itself fails open when a request carries neither header, exactly
+    what a bare `curl -X POST` (no browser involved) looks like. The QA
+    report proved this actually writes a real decision row. Failing
+    closed here cannot block any genuine same-origin submission: every
+    template that drives a state-changing route now renders the real
+    token into a hidden `csrf_token` field (`login.html`, `base.html`'s
+    two language-switch forms, `gap_row.html`, `legacy_row.html`), and a
+    forged cross-site page can never compute a matching value -- it
+    cannot read the `HttpOnly` `efs_csrf` cookie to do so.
     """
     security: SecurityContext = request.app.state.security
     host = (request.headers.get("host") or "").lower()
@@ -355,12 +356,11 @@ async def require_csrf(request: Request) -> None:
         raise HTTPException(status_code=403, detail="cross-site request rejected")
 
     submitted = await _submitted_csrf_token(request)
-    if submitted is None:
-        return
-
     cookie_value = request.cookies.get(CSRF_COOKIE)
-    if cookie_value is None or not hmac.compare_digest(
-        submitted, csrf_token(security.app_secret, cookie_value)
+    if (
+        submitted is None
+        or cookie_value is None
+        or not hmac.compare_digest(submitted, csrf_token(security.app_secret, cookie_value))
     ):
         raise HTTPException(status_code=403, detail="invalid CSRF token")
 

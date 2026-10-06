@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -250,5 +251,94 @@ def test_the_csp_header_is_present_even_on_a_denied_response(
 
         assert response.status_code == 403
         assert "content-security-policy" in response.headers
+    finally:
+        application.database.close()
+
+
+def test_a_bare_post_with_no_csrf_proof_at_all_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """SEC-01 (qa-report-data-01.md): the report's own repro -- a state-
+    changing POST carrying no `Origin`, no `Sec-Fetch-Site`, and no CSRF
+    token at all -- used to fall through `require_csrf`'s Origin/Sec-
+    Fetch-Site heuristic (both absent, so neither branch fires) straight
+    into "no token submitted, let it through". A real forgery looks
+    exactly like this: a page an attacker fully controls can never read
+    this app's `HttpOnly` `efs_csrf` cookie, so it can never attach a
+    real token, nor the `Origin`/`Sec-Fetch-Site` headers only a real
+    browser sets -- carrying none of the three *is* the forgery, not an
+    edge case to tolerate."""
+    application = _build(monkeypatch, tmp_path)
+    try:
+        app = _app(application)
+
+        with TestClient(app) as client:
+            response = client.post("/preferences", data={"lang": "en"})
+
+        assert response.status_code == 403
+    finally:
+        application.database.close()
+
+
+def test_every_page_extending_base_renders_a_real_csrf_token_into_its_language_switch_form(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """SEC-01: "the token infrastructure is fully implemented but never
+    wired into any Jinja2 template". `base.html`'s two language-switch
+    forms are shared by every page that extends it (`/`, `/outages`,
+    `/battery`, `/login`), so each page's own route needs to pass a real
+    token into context, not just the two pages an earlier slice already
+    wired. Submits the exact value each page actually rendered -- never
+    one computed independently -- so a page rendering the wrong or an
+    empty value is caught here, not just one that omits the field."""
+    application = _build(monkeypatch, tmp_path)
+    try:
+        app = _app(application)
+
+        with TestClient(app, follow_redirects=False) as client:
+            for path in ("/", "/outages", "/battery", "/login"):
+                page_html = client.get(path).text
+                match = re.search(r'name="csrf_token" value="([^"]+)"', page_html)
+                assert match is not None, f"{path} rendered no csrf_token field"
+                token = match.group(1)
+                assert token
+
+                response = client.post("/preferences", data={"lang": "en", "csrf_token": token})
+                assert response.status_code == 303, f"{path}'s own rendered token was rejected"
+    finally:
+        application.database.close()
+
+
+_LOGIN_PASSWORD = "a-strong-test-password-1"
+
+
+def test_the_login_pages_own_rendered_csrf_field_is_accepted_when_submitted_back(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """SEC-01: "the login form currently has no CSRF field" is the
+    report's own explicit callout, kept as its own test distinct from
+    the shared nav check above -- a regression that drops the hidden
+    field from `login.html` itself (but leaves the nav's two language
+    forms untouched) would still pass that one and must still be caught
+    here. Also proves the real login flow keeps working end-to-end once
+    the field exists, not just that some token renders somewhere."""
+    monkeypatch.setenv("ECOFLOW_STATS_PASSWORD", _LOGIN_PASSWORD)
+    application = _build(monkeypatch, tmp_path)
+    try:
+        app = _app(application)
+
+        with TestClient(app, follow_redirects=False) as client:
+            login_html = client.get("/login").text
+            match = re.search(r'name="csrf_token" value="([^"]+)"', login_html)
+            assert match is not None, "login.html rendered no csrf_token field"
+            token = match.group(1)
+
+            response = client.post(
+                "/login",
+                data={"password": _LOGIN_PASSWORD, "next": "/", "csrf_token": token},
+            )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/"
     finally:
         application.database.close()

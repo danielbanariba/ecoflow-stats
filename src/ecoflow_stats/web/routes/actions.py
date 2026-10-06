@@ -31,7 +31,13 @@ from ecoflow_stats.outages.service import record_decision, undo_decision
 from ecoflow_stats.storage.legacy import LegacyStore
 from ecoflow_stats.web.deps import LANG_COOKIE, negotiate_request_lang
 from ecoflow_stats.web.i18n import load_catalogs, translator
-from ecoflow_stats.web.security import require_csrf
+from ecoflow_stats.web.security import (
+    SecurityContext,
+    csrf_cookie_value,
+    csrf_token,
+    require_csrf,
+    set_csrf_cookie,
+)
 from ecoflow_stats.web.views import format_local_dt
 
 if TYPE_CHECKING:
@@ -90,9 +96,12 @@ def _render_gap_row(
     tz: str,
     t: Callable[[str], str],
     decision: dict[str, object] | None,
+    csrf_token: str,
 ) -> str:
     template = TEMPLATES.get_template("partials/gap_row.html")
-    return template.render(gap=gap, device_id=device_id, tz=tz, t=t, decision=decision)
+    return template.render(
+        gap=gap, device_id=device_id, tz=tz, t=t, decision=decision, csrf_token=csrf_token
+    )
 
 
 def _render_legacy_row(
@@ -102,9 +111,12 @@ def _render_legacy_row(
     tz: str,
     t: Callable[[str], str],
     decision: dict[str, object] | None,
+    csrf_token: str,
 ) -> str:
     template = TEMPLATES.get_template("partials/legacy_row.html")
-    return template.render(entry=entry, device_id=device_id, tz=tz, t=t, decision=decision)
+    return template.render(
+        entry=entry, device_id=device_id, tz=tz, t=t, decision=decision, csrf_token=csrf_token
+    )
 
 
 def _find_gap(ctx: ApiContext, device_id: int, gap_start: int) -> Gap | None:
@@ -120,6 +132,27 @@ def _find_gap(ctx: ApiContext, device_id: int, gap_start: int) -> Gap | None:
 def _legacy_store(request: Request) -> LegacyStore:
     application = request.app.state.application
     return LegacyStore(application.database.writer)
+
+
+def _csrf_context(request: Request) -> tuple[str, str, bool]:
+    """The real `efs_csrf` cookie value (minting one if the request
+    doesn't carry one yet, exactly like `web.routes.pages`'s GET routes)
+    plus the token derived from it (SEC-01) -- every route here re-
+    renders a `gap_row.html`/`legacy_row.html` row, and each of those
+    now has its own mutating forms that need a real token to submit
+    again. Returns `(cookie_value, token, is_new)` so the caller can
+    render with `token` before the `Response` object exists, and only
+    then decide whether `set_csrf_cookie` needs to run on it."""
+    security: SecurityContext = request.app.state.security
+    cookie_value, is_new = csrf_cookie_value(request)
+    return cookie_value, csrf_token(security.app_secret, cookie_value), is_new
+
+
+def _set_csrf_cookie_if_new(
+    request: Request, response: HTMLResponse, cookie_value: str, is_new: bool
+) -> None:
+    if is_new:
+        set_csrf_cookie(response, cookie_value, secure=request.url.scheme == "https")
 
 
 router = APIRouter()
@@ -146,13 +179,19 @@ def gap_review_list(
     decisions = ctx.decision_store.active(device_id) if ctx.decision_store is not None else []
     pending = unresolved_gaps(gaps, decisions, range_end)
     t = _translator_for(request)
+    cookie_value, token, is_new = _csrf_context(request)
     if not pending:
-        return HTMLResponse(f"<p>{t('outages.gap_review.empty')}</p>")
-    body = "".join(
-        _render_gap_row(gap=gap, device_id=device_id, tz=ctx.tz, t=t, decision=None)
-        for gap in pending
-    )
-    return HTMLResponse(body)
+        response = HTMLResponse(f"<p>{t('outages.gap_review.empty')}</p>")
+    else:
+        body = "".join(
+            _render_gap_row(
+                gap=gap, device_id=device_id, tz=ctx.tz, t=t, decision=None, csrf_token=token
+            )
+            for gap in pending
+        )
+        response = HTMLResponse(body)
+    _set_csrf_cookie_if_new(request, response, cookie_value, is_new)
+    return response
 
 
 @router.post("/outages/gaps/{gap_start}/decision", dependencies=[Depends(require_csrf)])
@@ -188,14 +227,18 @@ def decide_gap(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     t = _translator_for(request)
+    cookie_value, token, is_new = _csrf_context(request)
     html = _render_gap_row(
         gap=gap,
         device_id=device,
         tz=ctx.tz,
         t=t,
         decision={"id": decision_id, "verdict": verdict},
+        csrf_token=token,
     )
-    return HTMLResponse(html, headers={"HX-Trigger": "outages-changed"})
+    response = HTMLResponse(html, headers={"HX-Trigger": "outages-changed"})
+    _set_csrf_cookie_if_new(request, response, cookie_value, is_new)
+    return response
 
 
 @router.post("/outages/legacy/{start}/decision", dependencies=[Depends(require_csrf)])
@@ -233,14 +276,18 @@ def decide_legacy(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     t = _translator_for(request)
+    cookie_value, token, is_new = _csrf_context(request)
     html = _render_legacy_row(
         entry=entry,
         device_id=device,
         tz=ctx.tz,
         t=t,
         decision={"id": decision_id, "verdict": verdict},
+        csrf_token=token,
     )
-    return HTMLResponse(html, headers={"HX-Trigger": "outages-changed"})
+    response = HTMLResponse(html, headers={"HX-Trigger": "outages-changed"})
+    _set_csrf_cookie_if_new(request, response, cookie_value, is_new)
+    return response
 
 
 @router.post("/decisions/{decision_id}/undo", dependencies=[Depends(require_csrf)])
@@ -263,19 +310,26 @@ def undo(
         raise HTTPException(status_code=503, detail="decisions are not available")
     undo_decision(decision_id, decision_store=ctx.decision_store)
     t = _translator_for(request)
+    cookie_value, token, is_new = _csrf_context(request)
     if target == "gap":
         gap = _find_gap(ctx, device, start)
         if gap is None:
             raise HTTPException(status_code=404, detail="unknown gap")
-        html = _render_gap_row(gap=gap, device_id=device, tz=ctx.tz, t=t, decision=None)
+        html = _render_gap_row(
+            gap=gap, device_id=device, tz=ctx.tz, t=t, decision=None, csrf_token=token
+        )
     elif target == "legacy":
         entry = _legacy_store(request).get(device, start)
         if entry is None:
             raise HTTPException(status_code=404, detail="unknown legacy outage")
-        html = _render_legacy_row(entry=entry, device_id=device, tz=ctx.tz, t=t, decision=None)
+        html = _render_legacy_row(
+            entry=entry, device_id=device, tz=ctx.tz, t=t, decision=None, csrf_token=token
+        )
     else:
         raise HTTPException(status_code=400, detail=f"unknown undo target {target!r}")
-    return HTMLResponse(html, headers={"HX-Trigger": "outages-changed"})
+    response = HTMLResponse(html, headers={"HX-Trigger": "outages-changed"})
+    _set_csrf_cookie_if_new(request, response, cookie_value, is_new)
+    return response
 
 
 __all__ = ["decide_gap", "decide_legacy", "gap_review_list", "router", "undo"]

@@ -44,10 +44,12 @@
       <div class="glass-nav__lang" role="group" aria-label="Language">
         <form method="post" action="/preferences">
           <input type="hidden" name="lang" value="en">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button type="submit" class="glass-nav__lang-btn" {% if lang == 'en' %}aria-current="true"{% endif %}>EN</button>
         </form>
         <form method="post" action="/preferences">
           <input type="hidden" name="lang" value="es">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button type="submit" class="glass-nav__lang-btn" {% if lang == 'es' %}aria-current="true"{% endif %}>ES</button>
         </form>
       </div>

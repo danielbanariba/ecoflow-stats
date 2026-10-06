@@ -39,10 +39,13 @@ class SnapshotError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class Snapshot:
-    """Paths to one verified, read-only copy of the legacy sources."""
+    """Paths to one verified, read-only copy of each legacy source the
+    caller actually gave `make_snapshot` -- `None` for a source that
+    was never requested (CLI-01, qa-report-data-01.md: each source is
+    now optional, imported only when given)."""
 
-    samples_db: Path
-    outage_log: Path
+    samples_db: Path | None
+    outage_log: Path | None
 
 
 def _copy_samples_db(source: Path, dest_dir: Path) -> Path:
@@ -50,7 +53,15 @@ def _copy_samples_db(source: Path, dest_dir: Path) -> Path:
     database is not safely readable without it, since not-yet-checkpointed
     rows live only in the sidecar."""
     dest = dest_dir / source.name
-    shutil.copy2(source, dest)
+    try:
+        shutil.copy2(source, dest)
+    except FileNotFoundError as exc:
+        # CLI-01 (qa-report-data-01.md): this used to crash the whole
+        # process with an uncaught FileNotFoundError and a raw
+        # traceback -- a given-but-missing path is an operator error,
+        # not a bug, and deserves the same clear SnapshotError message
+        # every other snapshot failure already gets.
+        raise SnapshotError(f"{source}: samples database file not found") from exc
     wal_source = source.with_name(source.name + "-wal")
     if wal_source.exists():
         shutil.copy2(wal_source, dest_dir / wal_source.name)
@@ -102,25 +113,37 @@ def _verify_schema(path: Path) -> None:
 
 def make_snapshot(
     *,
-    samples_db: Path,
-    outage_log: Path,
+    samples_db: Path | None,
+    outage_log: Path | None,
     snapshot_dir: Path,
     sleep: Callable[[float], None] = time.sleep,
 ) -> Snapshot:
-    """Copy both legacy sources into `snapshot_dir`, verify the
-    `samples.db` copy, and return paths to the verified copies.
+    """Copy each legacy source actually given into `snapshot_dir`,
+    verifying `samples.db`'s copy when one was given, and return paths
+    to the verified copies -- `None` for a source that was never
+    requested (CLI-01, qa-report-data-01.md: the caller validates that
+    at least one of the two is given; this function itself has no
+    opinion and would produce an all-`None` `Snapshot` for neither).
 
     Neither original source is ever opened for anything but the plain
     file copy itself — every later read goes through the returned
     snapshot, never back to the live files.
     """
     snapshot_dir.mkdir(parents=True, exist_ok=True)
-    samples_copy = _copy_samples_db(samples_db, snapshot_dir)
-    outage_log_copy = snapshot_dir / outage_log.name
-    shutil.copy2(outage_log, outage_log_copy)
 
-    _quick_check(samples_copy, sleep=sleep)
-    _verify_schema(samples_copy)
+    samples_copy: Path | None = None
+    if samples_db is not None:
+        samples_copy = _copy_samples_db(samples_db, snapshot_dir)
+        _quick_check(samples_copy, sleep=sleep)
+        _verify_schema(samples_copy)
+
+    outage_log_copy: Path | None = None
+    if outage_log is not None:
+        outage_log_copy = snapshot_dir / outage_log.name
+        try:
+            shutil.copy2(outage_log, outage_log_copy)
+        except FileNotFoundError as exc:
+            raise SnapshotError(f"{outage_log}: outage log file not found") from exc
 
     return Snapshot(samples_db=samples_copy, outage_log=outage_log_copy)
 

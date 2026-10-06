@@ -168,6 +168,17 @@ def test_check_subparser_defaults_serial_to_none() -> None:
     assert args.serial is None
 
 
+def test_import_subparser_defaults_samples_and_outage_log_to_none() -> None:
+    """CLI-01 (qa-report-data-01.md): these used to default to the
+    container's own bind-mount paths (`/import/samples.db`,
+    `/import/outages.log`), crashing `import` outside a container when
+    neither flag was given. Pass-2: reverting either default string
+    back turns this red."""
+    args = _build_parser().parse_args(["import"])
+    assert args.samples is None
+    assert args.outage_log is None
+
+
 @pytest.mark.anyio
 async def test_run_check_command_extracts_configured_serials_from_settings(
     monkeypatch: pytest.MonkeyPatch,

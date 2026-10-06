@@ -76,6 +76,8 @@ def test_run_import_inserts_samples_and_outage_events_and_reports_counts(tmp_pat
         assert report.samples_inserted == 2
         assert report.samples_invalid == 0
         assert report.outage_events_imported == 1
+        assert report.outage_events_inserted == 1
+        assert report.outage_events_already_present == 0
         assert report.outage_events_suspected_phantom == 1
         assert report.outage_log_malformed_lines == 0
         assert report.earliest_ts == 1_700_000_000
@@ -126,10 +128,58 @@ def test_rerunning_an_unchanged_import_leaves_counts_identical(tmp_path: Path) -
         assert first.samples_inserted == 2
         assert second.samples_inserted == 0
         assert second.samples_skipped_overlap == 2
+        # CLI-02 (qa-report-data-01.md): the second run must report its
+        # one outage event as "already present", not re-claim it as a
+        # fresh insertion -- before this fix, outage_events_imported
+        # alone always said "1" on both runs with no way to tell them
+        # apart.
+        assert first.outage_events_imported == 1
+        assert first.outage_events_inserted == 1
+        assert first.outage_events_already_present == 0
+        assert second.outage_events_imported == 1
+        assert second.outage_events_inserted == 0
+        assert second.outage_events_already_present == 1
         (sample_count,) = db.writer.execute("SELECT COUNT(*) FROM samples").fetchone()
         (event_count,) = db.writer.execute("SELECT COUNT(*) FROM legacy_outages").fetchone()
         assert sample_count == 2
         assert event_count == 1
+    finally:
+        db.close()
+
+
+def test_run_import_with_only_an_outage_log_imports_legacy_events_without_touching_samples(
+    tmp_path: Path,
+) -> None:
+    """CLI-01 (qa-report-data-01.md): `run_import` must actually skip
+    reading samples when `snapshot_samples_db` is `None`, not crash on
+    `None.read_text()`/`sqlite3.connect(None)` -- the service-layer
+    half of making each source optional."""
+    db, device_id, import_id = _env(tmp_path)
+    try:
+        outage_log = tmp_path / "snapshot" / "outages.log"
+        outage_log.parent.mkdir(parents=True)
+        outage_log.write_text(
+            "2024-01-10 08:15:00\tcorte\t73\t\n2024-01-10 08:16:00\tretorno\t70\t1\n"
+        )
+
+        report = run_import(
+            snapshot_samples_db=None,
+            snapshot_outage_log=outage_log,
+            device_id=device_id,
+            source_tz="America/Tegucigalpa",
+            import_id=import_id,
+            writer_conn=db.writer,
+            now=_NOW,
+        )
+
+        assert report.outage_events_imported == 1
+        assert report.outage_events_inserted == 1
+        assert report.samples_read == 0
+        assert report.samples_inserted == 0
+        assert report.earliest_ts is None
+        assert report.latest_ts is None
+        (sample_count,) = db.writer.execute("SELECT COUNT(*) FROM samples").fetchone()
+        assert sample_count == 0
     finally:
         db.close()
 

@@ -33,8 +33,8 @@ if TYPE_CHECKING:
 
 def run_import(
     *,
-    snapshot_samples_db: Path,
-    snapshot_outage_log: Path,
+    snapshot_samples_db: Path | None,
+    snapshot_outage_log: Path | None,
     device_id: int,
     source_tz: str,
     import_id: int,
@@ -42,8 +42,17 @@ def run_import(
     now: datetime,
     derivation_store: DerivationStore | None = None,
 ) -> ImportReport:
-    """Import both halves of an already-verified snapshot for one device,
-    returning a report of what was found and done.
+    """Import whichever half(s) of an already-verified snapshot were
+    actually given for one device, returning a report of what was
+    found and done.
+
+    Either `snapshot_samples_db` or `snapshot_outage_log` may be
+    `None` (CLI-01, qa-report-data-01.md: each source is optional, and
+    this is the one function that actually skips reading a source
+    that was never given, rather than crashing on a `None` path) --
+    the caller is responsible for rejecting the case where both are
+    `None`, since that is a usage error this function has no opinion
+    about.
 
     `derivation_store` is optional only so every existing caller and test
     that predates `storage.derivations` keeps working unchanged; the real
@@ -56,36 +65,58 @@ def run_import(
     legacy_store = LegacyStore(writer_conn)
     sample_store = SampleStore(writer_conn)
 
-    parsed_log = parse_outage_log(snapshot_outage_log.read_text().splitlines(), source_tz=source_tz)
-    for event in parsed_log.events:
-        legacy_store.upsert(
-            device_id=device_id,
-            start_ts=event.start_ts,
-            end_ts=event.end_ts,
-            soc_start=event.soc_start,
-            soc_end=event.soc_end,
-            logged_minutes=event.logged_minutes,
-            start_line=event.start_line,
-            end_line=event.end_line,
-            source_tz=source_tz,
-            flags=event.flags,
-            import_id=import_id,
+    events_imported = 0
+    outage_events_inserted = 0
+    outage_events_already_present = 0
+    suspected_phantom = 0
+    malformed_lines = 0
+    if snapshot_outage_log is not None:
+        parsed_log = parse_outage_log(
+            snapshot_outage_log.read_text().splitlines(), source_tz=source_tz
         )
-    suspected_phantom = sum(1 for event in parsed_log.events if "suspected_phantom" in event.flags)
+        for event in parsed_log.events:
+            was_inserted = legacy_store.upsert(
+                device_id=device_id,
+                start_ts=event.start_ts,
+                end_ts=event.end_ts,
+                soc_start=event.soc_start,
+                soc_end=event.soc_end,
+                logged_minutes=event.logged_minutes,
+                start_line=event.start_line,
+                end_line=event.end_line,
+                source_tz=source_tz,
+                flags=event.flags,
+                import_id=import_id,
+            )
+            if was_inserted:
+                outage_events_inserted += 1
+            else:
+                # CLI-02 (qa-report-data-01.md): `upsert`'s own
+                # UNIQUE-constraint no-op (an already-imported event,
+                # re-parsed on a later run) must be reported as
+                # "already present", never silently counted among
+                # this run's own insertions.
+                outage_events_already_present += 1
+        events_imported = len(parsed_log.events)
+        suspected_phantom = sum(
+            1 for event in parsed_log.events if "suspected_phantom" in event.flags
+        )
+        malformed_lines = len(parsed_log.malformed)
 
-    read_conn = sqlite3.connect(snapshot_samples_db)
-    read_conn.row_factory = sqlite3.Row
-    try:
-        valid_rows = []
-        invalid = 0
-        for raw in iter_legacy_rows(read_conn):
-            transformed = transform_row(raw, now=now)
-            if isinstance(transformed, RejectedRow):
-                invalid += 1
-                continue
-            valid_rows.append((transformed.ts, transformed.reading))
-    finally:
-        read_conn.close()
+    valid_rows = []
+    invalid = 0
+    if snapshot_samples_db is not None:
+        read_conn = sqlite3.connect(snapshot_samples_db)
+        read_conn.row_factory = sqlite3.Row
+        try:
+            for raw in iter_legacy_rows(read_conn):
+                transformed = transform_row(raw, now=now)
+                if isinstance(transformed, RejectedRow):
+                    invalid += 1
+                    continue
+                valid_rows.append((transformed.ts, transformed.reading))
+        finally:
+            read_conn.close()
 
     batch = sample_store.add_batch(device_id, 2, valid_rows)
     timestamps = [ts for ts, _ in valid_rows]
@@ -99,9 +130,11 @@ def run_import(
         samples_skipped_existing=batch.skipped_existing,
         samples_skipped_overlap=batch.skipped_overlap,
         samples_invalid=invalid,
-        outage_events_imported=len(parsed_log.events),
+        outage_events_imported=events_imported,
+        outage_events_inserted=outage_events_inserted,
+        outage_events_already_present=outage_events_already_present,
         outage_events_suspected_phantom=suspected_phantom,
-        outage_log_malformed_lines=len(parsed_log.malformed),
+        outage_log_malformed_lines=malformed_lines,
         earliest_ts=min(timestamps, default=None),
         latest_ts=max(timestamps, default=None),
     )

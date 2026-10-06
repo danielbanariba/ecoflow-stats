@@ -72,8 +72,18 @@ def _build_parser() -> argparse.ArgumentParser:
         if name == "import":
             subparser.add_argument("--serial", default=None)
             subparser.add_argument("--source-tz", default=None)
-            subparser.add_argument("--samples", default="/import/samples.db")
-            subparser.add_argument("--outage-log", default="/import/outages.log")
+            # CLI-01 (qa-report-data-01.md): these used to default to
+            # the container's own bind-mount paths
+            # (/import/samples.db, /import/outages.log), so running
+            # `import` outside a container without both flags crashed
+            # on a path that was never going to exist. Neither the
+            # Dockerfile's ENTRYPOINT/CMD nor any documented
+            # invocation relies on these bare paths -- `import` is
+            # always a manual, explicit operator command -- so they
+            # default to `None` and `_run_import_command` requires at
+            # least one of the two to actually be given.
+            subparser.add_argument("--samples", default=None)
+            subparser.add_argument("--outage-log", default=None)
             subparser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -155,8 +165,8 @@ def _import_into(
     serial: str,
     adapter_id: str,
     source_tz: str,
-    snapshot_samples_db: Path,
-    snapshot_outage_log: Path,
+    snapshot_samples_db: Path | None,
+    snapshot_outage_log: Path | None,
     now: datetime,
     record_run: bool,
 ) -> ImportReport:
@@ -270,11 +280,22 @@ def _run_import_command(settings: Settings, args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    if not args.samples and not args.outage_log:
+        # CLI-01 (qa-report-data-01.md): neither source was given, and
+        # there is no longer a container-path default to silently
+        # fall back to -- importing nothing is never useful, so this
+        # fails clearly instead of either crashing deeper in
+        # `make_snapshot` or quietly doing no work at all.
+        print(
+            "at least one of --samples or --outage-log is required (nothing was given to import)",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
         snapshot = make_snapshot(
-            samples_db=Path(args.samples),
-            outage_log=Path(args.outage_log),
+            samples_db=Path(args.samples) if args.samples else None,
+            outage_log=Path(args.outage_log) if args.outage_log else None,
             snapshot_dir=settings.data_dir / "import-tmp",
         )
     except SnapshotError as exc:

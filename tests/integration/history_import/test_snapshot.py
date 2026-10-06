@@ -49,6 +49,24 @@ def test_snapshot_copies_both_legacy_sources_into_one_directory(tmp_path: Path) 
     assert snapshot.outage_log.parent == snapshot_dir
 
 
+def test_make_snapshot_with_only_an_outage_log_skips_the_samples_copy(tmp_path: Path) -> None:
+    """CLI-01 (qa-report-data-01.md): each legacy source is now
+    optional -- a `samples_db=None` must not crash (e.g. `None.name`)
+    and must not copy or verify anything samples-related, only the
+    outage log that was actually given."""
+    outage_log = tmp_path / "source" / "outages.log"
+    outage_log.parent.mkdir(parents=True)
+    write_outage_log(outage_log)
+    snapshot_dir = tmp_path / "import-tmp"
+
+    snapshot = make_snapshot(samples_db=None, outage_log=outage_log, snapshot_dir=snapshot_dir)
+
+    assert snapshot.samples_db is None
+    assert snapshot.outage_log is not None
+    assert snapshot.outage_log.read_text() == outage_log.read_text()
+    assert list(snapshot_dir.iterdir()) == [snapshot.outage_log]
+
+
 def test_snapshot_preserves_a_row_still_pending_in_an_uncheckpointed_wal(tmp_path: Path) -> None:
     """A WAL database is not safely readable without its `-wal` sidecar: a
     row already committed to the WAL but not yet checkpointed into the
@@ -157,4 +175,47 @@ def test_a_copy_missing_v1_columns_is_refused(tmp_path: Path) -> None:
     with pytest.raises(SnapshotError, match="missing"):
         make_snapshot(
             samples_db=samples_db, outage_log=outage_log, snapshot_dir=tmp_path / "import-tmp"
+        )
+
+
+def test_a_given_but_missing_samples_path_fails_with_a_clear_error_not_a_crash(
+    tmp_path: Path,
+) -> None:
+    """CLI-01 (qa-report-data-01.md): the actual reported crash site --
+    `_copy_samples_db`'s `shutil.copy2` raised an uncaught
+    `FileNotFoundError` with a raw traceback when a given path simply
+    did not exist (this used to always be true outside a container,
+    for the old hardcoded `/import/samples.db` default). Pass-2:
+    removing `_copy_samples_db`'s try/except turns this red with an
+    unhandled `FileNotFoundError` instead of the documented
+    `SnapshotError`."""
+    missing_samples_db = tmp_path / "source" / "does-not-exist.db"
+    outage_log = tmp_path / "source" / "outages.log"
+    outage_log.parent.mkdir(parents=True)
+    write_outage_log(outage_log)
+
+    with pytest.raises(SnapshotError, match="not found"):
+        make_snapshot(
+            samples_db=missing_samples_db,
+            outage_log=outage_log,
+            snapshot_dir=tmp_path / "import-tmp",
+        )
+
+
+def test_a_given_but_missing_outage_log_path_fails_with_a_clear_error_not_a_crash(
+    tmp_path: Path,
+) -> None:
+    """CLI-01's other half: the bare `shutil.copy2(outage_log, ...)`
+    call in `make_snapshot` had no error handling at all before this
+    fix -- same uncaught-crash defect, the other source."""
+    samples_db = tmp_path / "source" / "samples.db"
+    samples_db.parent.mkdir(parents=True)
+    write_valid_samples_db(samples_db)
+    missing_outage_log = tmp_path / "source" / "does-not-exist.log"
+
+    with pytest.raises(SnapshotError, match="not found"):
+        make_snapshot(
+            samples_db=samples_db,
+            outage_log=missing_outage_log,
+            snapshot_dir=tmp_path / "import-tmp",
         )

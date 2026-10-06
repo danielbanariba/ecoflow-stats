@@ -26,6 +26,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import logging
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -33,7 +34,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
@@ -42,6 +43,8 @@ if TYPE_CHECKING:
 
     from starlette.responses import Response
     from starlette.types import ASGIApp
+
+logger = logging.getLogger(__name__)
 
 SESSION_COOKIE = "efs_session"
 CSRF_COOKIE = "efs_csrf"
@@ -61,6 +64,10 @@ _SECURITY_HEADERS = {
     "content-security-policy": _CSP,
     "x-content-type-options": "nosniff",
     "referrer-policy": "same-origin",
+    "x-frame-options": "DENY",
+    # POLISH-01: defense-in-depth alongside the CSP's own
+    # `frame-ancestors 'none'` above, for a legacy browser that does not
+    # honor `frame-ancestors`.
 }
 
 
@@ -369,9 +376,37 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
 
     async def dispatch(self, request: Request, call_next: object) -> Response:
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception:
+            # SEC-05: an unhandled exception deep inside a route
+            # propagates straight past every other middleware's own
+            # response-decoration step to Starlette's bare default 500,
+            # which carries none of this app's security headers.
+            # `SecurityHeadersMiddleware` is registered outermost
+            # specifically so this `except` is the LAST point before
+            # the response leaves the app -- catching here, rather than
+            # with a registered FastAPI exception handler, avoids that
+            # handler's response being sent once deep inside the stack
+            # and then this same exception still unwinding through
+            # every enclosing `BaseHTTPMiddleware`'s own task group
+            # regardless (a real interaction in this Starlette version,
+            # observed while first wiring this fix as a handler
+            # instead). Body/status kept identical to Starlette's own
+            # previous default -- still never a stack trace or
+            # internals.
+            logger.exception("unhandled exception handling %s %s", request.method, request.url.path)
+            response = PlainTextResponse("Internal Server Error", status_code=500)
         for name, value in _SECURITY_HEADERS.items():
             response.headers[name] = value
+        if not request.url.path.startswith(_STATIC_PREFIX):
+            # SEC-06: every page and API response gets `no-store` --
+            # combined with SEC-03 (session not revoked on logout), a
+            # cacheable response risks a shared machine's browser
+            # back/forward cache still showing it after logout.
+            # `/static/*` is exempt: those assets are genuinely safe,
+            # and meant, to cache.
+            response.headers["cache-control"] = "no-store"
         return response
 
 

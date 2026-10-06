@@ -207,7 +207,7 @@
   "grid.table.frequency": "Frequency (min / avg / max)",
   "grid.table.readings": "Readings",
   "grid.table.empty": "No grid data recorded in this range.",
-  "grid.insight.stable": "Voltage stayed within {low}–{high} V over this range, consistent with a healthy grid.",
+  "grid.insight.stable": "Voltage ranged from {low} V to {high} V over this range.",
   "grid.insight.no_data": "No grid-present readings in this range to describe typical voltage.",
   "error.404.title": "Page not found",
   "error.404.message": "There's nothing at this address. It may have been moved, or the link may be out of date.",

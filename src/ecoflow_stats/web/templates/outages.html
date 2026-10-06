@@ -136,7 +136,8 @@
 
 <section class="outages-gap-review-section" aria-label="{{ t('outages.gap_review.heading') }}">
   <h2 class="reveal">{{ t('outages.gap_review.heading') }}</h2>
-  <p class="reveal mt-6 text-muted">{{ t('outages.gap_review.count', count=view.gap_review_count).format(count=view.gap_review_count) }}</p>
+  <p class="reveal mt-6 text-muted">{{ t('outages.gap_review.intro') }}</p>
+  <p class="reveal text-muted">{{ t('outages.gap_review.count', count=view.gap_review_count).format(count=view.gap_review_count) }}</p>
   <button
     type="button"
     class="btn btn--ghost gap-review-expand reveal"
@@ -151,7 +152,7 @@
   <h2 class="reveal">{{ t('outages.mains_strip.heading') }}</h2>
   <div class="chart-card reveal mt-6">
     <div class="chart-card__head">
-      <p class="text-muted text-caption">{{ t('outages.mains_strip.aria_label') }}</p>
+      <p class="text-muted text-caption">{{ t('outages.mains_strip.caption') }}</p>
       <div class="legend-row">
         <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--present"></span>{{ t('outages.state.present') }}</span>
         <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--unknown"></span>{{ t('outages.state.unknown') }}</span>

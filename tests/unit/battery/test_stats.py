@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from ecoflow_stats.battery.stats import (
     BatteryPowerStatus,
+    BatteryTrendInsight,
     ChargePoint,
     DailyBatteryTrend,
     battery_power_status,
@@ -17,6 +18,7 @@ from ecoflow_stats.battery.stats import (
     bucket_charge_history,
     charge_history,
     depth_of_discharge,
+    summarize_battery_trend,
 )
 from ecoflow_stats.devices.reading import Reading
 from ecoflow_stats.outages.model import Event
@@ -216,3 +218,111 @@ def test_battery_power_status_omits_remaining_time_the_device_does_not_report() 
         Reading(batt_in_w=0.0, batt_out_w=50.0, chg_remain_min=15, dsg_remain_min=120)
     )
     assert discharging_uses_its_own_field.remaining_min == 120
+
+
+def test_summarize_battery_trend_reports_the_change_from_the_first_to_the_last_day() -> None:
+    """Design critique (qa-report-ui-01.md): the battery trend chart had
+    no insight caption at all -- just a static aria-label. A defect
+    that compared the wrong two days (e.g. the two most recent instead
+    of first-vs-last), or got the direction backwards, would show a
+    sentence that contradicts the chart sitting right next to it."""
+    days = [
+        DailyBatteryTrend(
+            day="2026-01-01",
+            cycles_last=10,
+            soh_last=99.0,
+            soc_min=20,
+            soc_max=95,
+            batt_temp_max=25.0,
+        ),
+        DailyBatteryTrend(
+            day="2026-01-02",
+            cycles_last=12,
+            soh_last=98.5,
+            soc_min=15,
+            soc_max=90,
+            batt_temp_max=26.0,
+        ),
+        DailyBatteryTrend(
+            day="2026-01-07",
+            cycles_last=25,
+            soh_last=97.0,
+            soc_min=10,
+            soc_max=88,
+            batt_temp_max=27.0,
+        ),
+    ]
+
+    insight = summarize_battery_trend(days)
+
+    assert insight == BatteryTrendInsight(soh_delta=-2.0, soh_direction="down", cycles_delta=15)
+
+
+def test_summarize_battery_trend_reports_steady_when_soh_is_unchanged() -> None:
+    days = [
+        DailyBatteryTrend(
+            day="2026-01-01",
+            cycles_last=10,
+            soh_last=98.0,
+            soc_min=20,
+            soc_max=95,
+            batt_temp_max=25.0,
+        ),
+        DailyBatteryTrend(
+            day="2026-01-07",
+            cycles_last=10,
+            soh_last=98.0,
+            soc_min=20,
+            soc_max=95,
+            batt_temp_max=25.0,
+        ),
+    ]
+
+    insight = summarize_battery_trend(days)
+
+    assert insight == BatteryTrendInsight(soh_delta=0.0, soh_direction="steady", cycles_delta=0)
+
+
+def test_summarize_battery_trend_is_unavailable_with_fewer_than_two_days_or_missing_fields() -> (
+    None
+):
+    """Named Defect "missing read as zero": a single rollup day has no
+    "change" to report at all -- a defect that defaulted to a
+    fabricated 0.0 delta (rather than `None`) would claim a flat trend
+    the device never actually reported. Same for a missing boundary
+    `soh_last`/`cycles_last`."""
+    one_day = [
+        DailyBatteryTrend(
+            day="2026-01-01",
+            cycles_last=10,
+            soh_last=98.0,
+            soc_min=20,
+            soc_max=95,
+            batt_temp_max=25.0,
+        )
+    ]
+    assert summarize_battery_trend(one_day) == BatteryTrendInsight(
+        soh_delta=None, soh_direction=None, cycles_delta=None
+    )
+
+    missing_boundary = [
+        DailyBatteryTrend(
+            day="2026-01-01",
+            cycles_last=None,
+            soh_last=None,
+            soc_min=20,
+            soc_max=95,
+            batt_temp_max=25.0,
+        ),
+        DailyBatteryTrend(
+            day="2026-01-07",
+            cycles_last=12,
+            soh_last=97.0,
+            soc_min=15,
+            soc_max=90,
+            batt_temp_max=26.0,
+        ),
+    ]
+    assert summarize_battery_trend(missing_boundary) == BatteryTrendInsight(
+        soh_delta=None, soh_direction=None, cycles_delta=None
+    )

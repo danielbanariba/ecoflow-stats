@@ -188,6 +188,58 @@ def battery_power_status(reading: Reading) -> BatteryPowerStatus:
     return BatteryPowerStatus(direction="idle", net_w=net_w, remaining_min=None)
 
 
+@dataclass(frozen=True, slots=True)
+class BatteryTrendInsight:
+    """A data-driven, one-sentence-ready summary of the retained rollup
+    history's own first-to-last change (design critique,
+    qa-report-ui-01.md: the trend chart had no insight caption at all,
+    just a static aria-label). Every field is computed strictly from
+    `battery_trend`'s own ordered days -- never invented, and `None`
+    whenever there is not enough history to compare.
+    """
+
+    soh_delta: float | None
+    """`last.soh_last - first.soh_last`, rounded to 1 decimal -- `None`
+    when fewer than 2 days are available or either boundary's
+    `soh_last` is itself missing."""
+    soh_direction: Literal["up", "down", "steady"] | None
+    """`None` exactly when `soh_delta` is `None`; `"steady"` only when
+    the rounded delta is exactly `0.0`, never guessed."""
+    cycles_delta: int | None
+    """`last.cycles_last - first.cycles_last` -- `None` under the same
+    conditions as `soh_delta`."""
+
+
+def summarize_battery_trend(days: Sequence[DailyBatteryTrend]) -> BatteryTrendInsight:
+    """Compare the retained rollup history's first and last day (by
+    `battery_trend`'s own day-ordering) -- no new query, no smoothing,
+    no estimation beyond what the two boundary days themselves report.
+    """
+    ordered = battery_trend(days)
+    if len(ordered) < 2:
+        return BatteryTrendInsight(soh_delta=None, soh_direction=None, cycles_delta=None)
+
+    first, last = ordered[0], ordered[-1]
+
+    soh_delta: float | None
+    soh_direction: Literal["up", "down", "steady"] | None
+    if first.soh_last is not None and last.soh_last is not None:
+        soh_delta = round(last.soh_last - first.soh_last, 1)
+        soh_direction = "steady" if soh_delta == 0 else ("up" if soh_delta > 0 else "down")
+    else:
+        soh_delta = None
+        soh_direction = None
+
+    cycles_delta = (
+        last.cycles_last - first.cycles_last
+        if first.cycles_last is not None and last.cycles_last is not None
+        else None
+    )
+    return BatteryTrendInsight(
+        soh_delta=soh_delta, soh_direction=soh_direction, cycles_delta=cycles_delta
+    )
+
+
 def battery_trend(days: Sequence[DailyBatteryTrend]) -> list[DailyBatteryTrend]:
     """The cycle-count and state-of-health trend across the retained
     rollup history, in day order (battery requirement "Cycle Count and
@@ -204,6 +256,7 @@ def battery_trend(days: Sequence[DailyBatteryTrend]) -> list[DailyBatteryTrend]:
 
 __all__ = [
     "BatteryPowerStatus",
+    "BatteryTrendInsight",
     "ChargePoint",
     "DailyBatteryTrend",
     "battery_power_status",
@@ -211,4 +264,5 @@ __all__ = [
     "bucket_charge_history",
     "charge_history",
     "depth_of_discharge",
+    "summarize_battery_trend",
 ]

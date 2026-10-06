@@ -366,3 +366,49 @@ def test_the_page_head_eyebrow_shows_the_selected_range_not_the_heading_text(
         assert "2026-01-10" in html
     finally:
         application.database.close()
+
+
+def test_the_gap_review_intro_explains_what_a_gap_is_not_just_the_count(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Design critique (qa-report-ui-01.md): the gap-review section
+    showed only a bare "N gaps awaiting review" count, with no
+    explanation that a gap is unconfirmed missing data -- not a
+    confirmed outage. A reader could mistake the count for confirmed
+    outages. Pass-2: removing the new intro paragraph (keeping only
+    the pre-existing count sentence) turns this red."""
+    application, _device_id, client = _client(monkeypatch, tmp_path)
+    try:
+        with client:
+            html = client.get("/outages").text
+
+        assert "A gap is a stretch with no data at all" in html
+        assert "not a confirmed outage" in html
+    finally:
+        application.database.close()
+
+
+def test_the_mains_strip_caption_is_distinct_from_its_own_aria_label(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Design critique (qa-report-ui-01.md): the mains-strip chart's
+    visible caption just repeated its own aria-label text verbatim,
+    telling a sighted user nothing a screen-reader summary did not
+    already say. Pass-1: the visible caption must now explain what the
+    solid-vs-hatched segments actually mean. Pass-2: reverting the
+    caption's i18n key back to `outages.mains_strip.aria_label` turns
+    this red -- the caption would show the aria-label's own sentence
+    instead of the new explanatory one, and this assertion would find
+    neither "hatched" nor "recorded" anywhere in a caption paragraph."""
+    application, _device_id, client = _client(monkeypatch, tmp_path)
+    try:
+        with client:
+            html = client.get("/outages").text
+
+        assert "a hatched segment means no data was recorded" in html
+        assert (
+            'aria-label="Timeline of grid presence, outages, and unknown time over the'
+            ' selected range"' in html
+        )
+    finally:
+        application.database.close()

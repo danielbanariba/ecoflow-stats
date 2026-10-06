@@ -397,6 +397,56 @@ def test_the_trend_table_renders_rollup_rows_in_day_order(
         application.database.close()
 
 
+def test_the_trend_caption_reports_the_batterys_real_change_not_a_static_placeholder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Design critique (qa-report-ui-01.md): the trend chart had no
+    insight caption at all -- just a static aria-label repeating the
+    chart's own purpose. Pass-1: the visible caption must report the
+    retained history's own first-to-last change
+    (`battery.stats.summarize_battery_trend`), not a placeholder.
+    Pass-2: reverting the caption back to the plain
+    `battery.trend.aria_label` text turns this red -- neither the
+    computed delta nor the direction word would appear anywhere in the
+    page."""
+    application, _device_id, client = _client(
+        monkeypatch,
+        tmp_path,
+        rollups=[
+            _rollup_row("2026-01-02", cycles_last=10, soh_last=98.0),
+            _rollup_row("2026-01-07", cycles_last=15, soh_last=96.5),
+        ],
+    )
+    try:
+        with client:
+            html = client.get("/battery").text
+
+        assert "down 1.5 points" in html
+        assert "5 more cycles" in html
+    finally:
+        application.database.close()
+
+
+def test_the_trend_caption_is_unavailable_with_too_little_rollup_history(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Named Defect "missing read as zero": a single rollup day has
+    nothing to compare against -- a defect that fabricated a flat
+    "steady" sentence (rather than admitting there is not enough
+    history yet) would claim a trend the device never actually
+    reported."""
+    application, _device_id, client = _client(
+        monkeypatch, tmp_path, rollups=[_rollup_row("2026-01-02", cycles_last=10, soh_last=98.0)]
+    )
+    try:
+        with client:
+            html = client.get("/battery").text
+
+        assert "Not enough rollup history yet to show a trend." in html
+    finally:
+        application.database.close()
+
+
 def test_every_chart_element_has_an_aria_label_and_a_details_fallback_table(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

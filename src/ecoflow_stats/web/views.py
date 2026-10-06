@@ -16,11 +16,13 @@ from zoneinfo import ZoneInfo
 from ecoflow_stats.battery.service import observed_autonomy
 from ecoflow_stats.battery.stats import (
     BatteryPowerStatus,
+    BatteryTrendInsight,
     battery_power_status,
     battery_trend,
     bucket_charge_history,
     charge_history,
     depth_of_discharge,
+    summarize_battery_trend,
 )
 
 if TYPE_CHECKING:
@@ -457,6 +459,10 @@ class BatteryViewModel:
     from the exact same latest-by-`ts` already-fetched `samples` entry
     `current_soc` itself comes from -- `None` only when the range has
     no sample at all."""
+    trend_insight: BatteryTrendInsight
+    """Design critique (qa-report-ui-01.md): a data-driven, one-sentence
+    caption for the cycle/SoH trend chart, computed from the same
+    already-fetched `trend_rows` -- never a static placeholder."""
 
 
 def build_battery_dod_row(event: Event) -> BatteryDodRow:
@@ -558,6 +564,7 @@ def build_battery_view_model(
         current_soh=latest_trend_day.soh_last if latest_trend_day is not None else None,
         current_cycles=latest_trend_day.cycles_last if latest_trend_day is not None else None,
         battery_power=battery_power_status(latest_reading) if latest_reading is not None else None,
+        trend_insight=summarize_battery_trend(trend_days),
     )
 
 

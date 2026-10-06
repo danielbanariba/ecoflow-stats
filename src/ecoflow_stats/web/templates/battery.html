@@ -119,7 +119,25 @@
   <h2 class="reveal">{{ t('battery.trend.heading') }}</h2>
   <div class="chart-card reveal mt-6">
     <div class="chart-card__head">
-      <p class="text-muted text-caption">{{ t('battery.trend.aria_label') }}</p>
+      {#
+        Design critique (qa-report-ui-01.md): the trend chart had no
+        insight caption at all, just a static aria-label repeating the
+        chart's own purpose. The visible caption now reports the
+        retained history's own first-to-last change
+        (`battery.stats.summarize_battery_trend`) instead -- the
+        `aria-label` passed to `chart_with_fallback` below stays the
+        descriptive `battery.trend.aria_label` text, unchanged.
+      #}
+      <p class="text-muted text-caption">
+        {% if view.trend_insight.soh_direction is none %}
+          {{ t('battery.trend.insight.unavailable') }}
+        {% else %}
+          {{ t('battery.trend.insight.soh_' ~ view.trend_insight.soh_direction).format(delta=(view.trend_insight.soh_delta | abs)) }}
+          {% if view.trend_insight.cycles_delta is not none and view.trend_insight.cycles_delta > 0 %}
+            {{ t('battery.trend.insight.cycles').format(delta=view.trend_insight.cycles_delta) }}
+          {% endif %}
+        {% endif %}
+      </p>
       <div class="legend-row">
         <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--solar"></span>{{ t('battery.trend.table.cycles') }}</span>
         <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--warm"></span>{{ t('battery.trend.table.soh') }}</span>

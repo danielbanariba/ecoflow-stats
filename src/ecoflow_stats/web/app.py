@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from ecoflow_stats.acquisition.collector import run_forever
 from ecoflow_stats.jobs import SupervisedTask, SupervisedTaskHandle, run_derive_forever
 from ecoflow_stats.outages.model import DetectorConfig
+from ecoflow_stats.storage.decisions import DecisionStore
 from ecoflow_stats.storage.outages import OutageStore
 from ecoflow_stats.web.routes.api import ApiContext
 from ecoflow_stats.web.routes.api import router as api_router
@@ -125,6 +126,8 @@ def _build_api_context(application: Application) -> ApiContext:
         sample_store=application.sample_store,
         outage_store=OutageStore(application.database.writer),
         device_records=application.device_records,
+        decision_store=DecisionStore(application.database.writer),
+        tz=application.settings.tz,
     )
 
 

@@ -251,4 +251,21 @@ def resolve(
     )
 
 
-__all__ = ["EffectiveOutage", "EffectiveView", "LegacyStatus", "resolve"]
+def unresolved_gaps(
+    gaps: Sequence[Gap], decisions: Sequence[Decision], range_end: int
+) -> list[Gap]:
+    """Every gap with no active decision overlapping it by at least
+    `_MIN_OVERLAP_RATIO` -- the review queue a user still needs to act on
+    (web-ui "Gap and Phantom Review Flow"), the inverse of the matching
+    `resolve()` already does internally once a gap *is* decided. Reuses
+    `_best_decision` rather than duplicating its overlap-matching rule in
+    a caller."""
+    return [
+        gap
+        for gap in gaps
+        if _best_decision(decisions, "gap", gap.start_ts, _closed_end(gap.end_ts, range_end))
+        is None
+    ]
+
+
+__all__ = ["EffectiveOutage", "EffectiveView", "LegacyStatus", "resolve", "unresolved_gaps"]

@@ -1,0 +1,308 @@
+"""Integration tests for `storage.rollups.RollupStore` and
+`rollups.service.derive_rollups` against real SQLite.
+
+Storage requirement: derived data is separate from raw samples and
+recomputable. Battery spec: "Charge History" and "Cycle Count and
+State-of-Health Trends" (the rollup-writing half; design-data section
+4.6). Design-data section 4.8: a refresh recomputes from
+`local_day(dirty_from_ts)` through today, or everything on a
+version/params change.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from ecoflow_stats.devices.reading import Reading
+from ecoflow_stats.rollups import service as rollups_service
+from ecoflow_stats.rollups.service import derive_rollups
+from ecoflow_stats.storage.database import Database
+from ecoflow_stats.storage.derivations import DerivationStore
+from ecoflow_stats.storage.devices import DeviceStore
+from ecoflow_stats.storage.rollups import DailyRollup, RollupStore
+from ecoflow_stats.storage.samples import SampleStore
+
+_NOW = datetime(2026, 10, 6, tzinfo=UTC)
+
+
+def _reading(**overrides: object) -> Reading:
+    return Reading(**overrides)  # type: ignore[arg-type]
+
+
+class _Env:
+    def __init__(self, db_path: Path) -> None:
+        self.db = Database(db_path)
+        self.writer = self.db.writer
+
+    def device(self, sn: str) -> int:
+        return DeviceStore(self.writer).upsert(sn=sn, adapter_id="delta_pro", created_at=1).id
+
+    def insert(self, device_id: int, samples: list[tuple[int, Reading]]) -> None:
+        store = SampleStore(self.writer)
+        for ts, reading in samples:
+            store.add(device_id, ts, 1, reading)
+
+    def derive(self, device_id: int, *, now: datetime = _NOW, full: bool = False) -> bool:
+        self.writer.execute("BEGIN IMMEDIATE")
+        try:
+            ran = derive_rollups(
+                device_id,
+                sample_store=SampleStore(self.writer),
+                rollup_store=RollupStore(self.writer),
+                derivation_store=DerivationStore(self.writer),
+                now=now,
+                full=full,
+            )
+        except Exception:
+            self.writer.rollback()
+            raise
+        self.writer.commit()
+        return ran
+
+    def rollup(self, device_id: int, day: str) -> DailyRollup | None:
+        return RollupStore(self.writer).get(device_id, day)
+
+    def close(self) -> None:
+        self.db.close()
+
+
+@pytest.fixture
+def env(tmp_path: Path) -> _Env:
+    created = _Env(tmp_path / "ecoflow-stats.db")
+    yield created
+    created.close()
+
+
+# --- RollupStore: keying and column-scoped upsert --------------------------
+
+
+def test_rollup_rows_are_keyed_by_device_id_and_day(env: _Env) -> None:
+    """Storage requirement "Schema Supports Multiple Devices": two
+    devices rolling up the same calendar day must not collide into one
+    row -- a defect dropping `device_id` from the key would silently
+    merge two stations' battery stats."""
+    store = RollupStore(env.writer)
+    device_a = env.device("BA31ZEB1SF7F0001")
+    device_b = env.device("BA31ZEB1SF7F0002")
+
+    store.upsert(
+        device_a,
+        "2026-10-01",
+        soc_min=40,
+        soc_max=90,
+        cycles_last=10,
+        soh_last=98.0,
+        batt_temp_max=25.0,
+    )
+    store.upsert(
+        device_b,
+        "2026-10-01",
+        soc_min=10,
+        soc_max=50,
+        cycles_last=3,
+        soh_last=99.0,
+        batt_temp_max=22.0,
+    )
+    env.writer.commit()
+
+    row_a = store.get(device_a, "2026-10-01")
+    row_b = store.get(device_b, "2026-10-01")
+    assert row_a is not None and row_a.soc_min == 40
+    assert row_b is not None and row_b.soc_min == 10
+
+
+def test_upsert_on_the_same_key_replaces_rather_than_duplicates(env: _Env) -> None:
+    """A re-run of a day's rollup (recompute is idempotent-by-construction,
+    never additive, per the same rule `OutageStore.replace_from` already
+    enforces for events and gaps) must update the existing row, not
+    accumulate a duplicate `(device_id, day)` entry."""
+    store = RollupStore(env.writer)
+    device_id = env.device("BA31ZEB1SF7F0001")
+    store.upsert(
+        device_id,
+        "2026-10-01",
+        soc_min=40,
+        soc_max=90,
+        cycles_last=10,
+        soh_last=98.0,
+        batt_temp_max=25.0,
+    )
+    env.writer.commit()
+
+    store.upsert(
+        device_id,
+        "2026-10-01",
+        soc_min=35,
+        soc_max=92,
+        cycles_last=11,
+        soh_last=97.5,
+        batt_temp_max=27.0,
+    )
+    env.writer.commit()
+
+    row = store.get(device_id, "2026-10-01")
+    assert row is not None
+    assert (row.soc_min, row.soc_max, row.cycles_last, row.soh_last, row.batt_temp_max) == (
+        35,
+        92,
+        11,
+        97.5,
+        27.0,
+    )
+    (count,) = env.writer.execute(
+        "SELECT COUNT(*) FROM daily_rollups WHERE device_id = ? AND day = ?",
+        (device_id, "2026-10-01"),
+    ).fetchone()
+    assert count == 1
+
+
+def test_upsert_never_touches_another_capabilitys_already_written_columns(env: _Env) -> None:
+    """Schema-extensibility guarantee the design calls for: a future
+    energy-field write (Phase 18) to the same `(device_id, day)` row
+    must survive this capability's own later battery-field upsert -- a
+    defect that updated every column instead of only the five battery
+    ones would silently erase it."""
+    device_id = env.device("BA31ZEB1SF7F0001")
+    env.writer.execute(
+        "INSERT INTO daily_rollups (device_id, day, chg_ac_wh) VALUES (?, ?, ?)",
+        (device_id, "2026-10-01", 1234.5),
+    )
+    env.writer.commit()
+
+    RollupStore(env.writer).upsert(
+        device_id,
+        "2026-10-01",
+        soc_min=40,
+        soc_max=90,
+        cycles_last=10,
+        soh_last=98.0,
+        batt_temp_max=25.0,
+    )
+    env.writer.commit()
+
+    (chg_ac_wh,) = env.writer.execute(
+        "SELECT chg_ac_wh FROM daily_rollups WHERE device_id = ? AND day = ?",
+        (device_id, "2026-10-01"),
+    ).fetchone()
+    assert chg_ac_wh == 1234.5
+
+
+# --- derive_rollups: battery-field aggregation ------------------------------
+
+
+def test_a_full_recompute_aggregates_each_day_independently(env: _Env) -> None:
+    """Task 17.2: `cycles_last`, `soh_last`, `soc_min`/`max`,
+    `batt_temp_max` per day. Also covers the NULL-discipline rule: a
+    sample missing a field must not pull that day's range toward zero,
+    and a field's "last" value must be the last sample that actually
+    reported it, not simply the chronologically last sample in the
+    day."""
+    device_id = env.device("BA31ZEB1SF7F0001")
+    day_one = [
+        (0, _reading(soc=90, cycles=10, soh=98.0, batt_temp_c=24.0)),
+        (3600, _reading(soc=70, cycles=None, soh=None, batt_temp_c=None)),
+    ]
+    day_two = [(86_400, _reading(soc=60, cycles=11, soh=97.5, batt_temp_c=30.0))]
+    env.insert(device_id, day_one + day_two)
+
+    assert env.derive(device_id) is True
+
+    first = env.rollup(device_id, "1970-01-01")
+    assert first is not None
+    assert (
+        first.soc_min,
+        first.soc_max,
+        first.cycles_last,
+        first.soh_last,
+        first.batt_temp_max,
+    ) == (
+        70,
+        90,
+        10,
+        98.0,
+        24.0,
+    )
+    second = env.rollup(device_id, "1970-01-02")
+    assert second is not None
+    assert (
+        second.soc_min,
+        second.soc_max,
+        second.cycles_last,
+        second.soh_last,
+        second.batt_temp_max,
+    ) == (60, 60, 11, 97.5, 30.0)
+
+
+def test_an_incremental_recompute_only_touches_days_at_or_after_the_dirty_day(env: _Env) -> None:
+    """Design-data section 4.8: "recomputes days from
+    `local_day(dirty_from_ts)` ... through today". A defect that
+    rescanned all history on every dirty mark would still pass a naive
+    "new data shows up" check; this test instead proves an EARLIER,
+    already-rolled-up day is correctly never re-queried, by giving that
+    earlier day a lower `soc_min` only after the derivation already ran
+    clean on it -- if the incremental run below ever re-queried day
+    one, this lower value would show up as its new `soc_min`."""
+    device_id = env.device("BA31ZEB1SF7F0001")
+    env.insert(device_id, [(0, _reading(soc=90))])
+    assert env.derive(device_id) is True
+    first_after_initial_run = env.rollup(device_id, "1970-01-01")
+    assert first_after_initial_run is not None and first_after_initial_run.soc_min == 90
+
+    env.insert(device_id, [(1_800, _reading(soc=5))])  # still day one
+    env.insert(device_id, [(86_400, _reading(soc=60))])  # day two
+    DerivationStore(env.writer).mark_dirty(device_id, "rollups", 86_400)
+
+    assert env.derive(device_id) is True
+
+    untouched_first_day = env.rollup(device_id, "1970-01-01")
+    assert untouched_first_day is not None and untouched_first_day.soc_min == 90
+    second_day = env.rollup(device_id, "1970-01-02")
+    assert second_day is not None and second_day.soc_min == 60
+
+
+def test_a_clean_derivation_does_nothing_unless_forced(env: _Env) -> None:
+    device_id = env.device("BA31ZEB1SF7F0001")
+    env.insert(device_id, [(0, _reading(soc=90))])
+    assert env.derive(device_id) is True
+    computed_at_first = DerivationStore(env.writer).get(device_id, "rollups").computed_at  # type: ignore[union-attr]
+
+    ran = env.derive(device_id, now=datetime(2026, 10, 6, 1, tzinfo=UTC))
+
+    assert ran is False
+    computed_at_after = DerivationStore(env.writer).get(device_id, "rollups").computed_at  # type: ignore[union-attr]
+    assert computed_at_after == computed_at_first
+
+
+def test_the_full_flag_forces_a_recompute_even_when_clean(env: _Env) -> None:
+    device_id = env.device("BA31ZEB1SF7F0001")
+    env.insert(device_id, [(0, _reading(soc=90))])
+    assert env.derive(device_id) is True
+    computed_at_first = DerivationStore(env.writer).get(device_id, "rollups").computed_at  # type: ignore[union-attr]
+
+    ran = env.derive(device_id, now=datetime(2026, 10, 6, 1, tzinfo=UTC), full=True)
+
+    assert ran is True
+    computed_at_after = DerivationStore(env.writer).get(device_id, "rollups").computed_at  # type: ignore[union-attr]
+    assert computed_at_after != computed_at_first
+
+
+def test_a_version_change_forces_a_full_recompute_even_without_a_dirty_mark(
+    env: _Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Design-data section 1: "a configuration change forces a full
+    recompute exactly like a detector version bump does" -- the same
+    rule applied to the rollup version here."""
+    device_id = env.device("BA31ZEB1SF7F0001")
+    env.insert(device_id, [(0, _reading(soc=90))])
+    assert env.derive(device_id) is True
+
+    monkeypatch.setattr(rollups_service, "_ROLLUP_VERSION", 2)
+
+    ran = env.derive(device_id, now=datetime(2026, 10, 6, 1, tzinfo=UTC))
+
+    assert ran is True
+    row = DerivationStore(env.writer).get(device_id, "rollups")
+    assert row is not None and row.version == 2

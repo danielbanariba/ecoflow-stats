@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from itertools import pairwise
 
+from ecoflow_stats.battery.stats import BatteryPowerStatus
 from ecoflow_stats.devices.reading import Reading
 from ecoflow_stats.live_status.status import DeviceStatus, OutageStatus
 from ecoflow_stats.outages.aggregates import OutageAggregates
@@ -20,6 +21,7 @@ from ecoflow_stats.outages.model import Gap
 from ecoflow_stats.outages.resolve import EffectiveOutage
 from ecoflow_stats.storage.devices import DeviceRecord
 from ecoflow_stats.web.views import (
+    OutagesSummary,
     build_device_options,
     build_mains_strip_segments,
     build_outage_event_rows,
@@ -30,6 +32,9 @@ from ecoflow_stats.web.views import (
 )
 
 _NO_OUTAGE = OutageStatus(ongoing=False, since=None)
+_NO_OUTAGES_30D = OutagesSummary(
+    count=0, total_downtime_s=0, longest_s=None, mean_s=None, brief_count=0, unknown_time_s=0
+)
 _RANGE_START = 1_000_000
 _RANGE_END = 1_000_000 + 7 * 24 * 60 * 60
 
@@ -123,7 +128,12 @@ def test_a_device_with_no_recorded_sample_reports_no_data_not_a_fabricated_readi
         outage=_NO_OUTAGE,
     )
 
-    view = build_overview_view_model(device_records=records, selected_device_id=1, status=status)
+    view = build_overview_view_model(
+        device_records=records,
+        selected_device_id=1,
+        status=status,
+        outages_30d=_NO_OUTAGES_30D,
+    )
 
     assert view.has_data is False
 
@@ -143,7 +153,12 @@ def test_a_fresh_sample_reports_data_with_its_grid_state_and_charge() -> None:
         outage=_NO_OUTAGE,
     )
 
-    view = build_overview_view_model(device_records=records, selected_device_id=1, status=status)
+    view = build_overview_view_model(
+        device_records=records,
+        selected_device_id=1,
+        status=status,
+        outages_30d=_NO_OUTAGES_30D,
+    )
 
     assert view.has_data is True
     assert view.grid == "absent"
@@ -165,10 +180,121 @@ def test_a_stale_sample_is_reported_stale_alongside_its_age() -> None:
         outage=_NO_OUTAGE,
     )
 
-    view = build_overview_view_model(device_records=records, selected_device_id=1, status=status)
+    view = build_overview_view_model(
+        device_records=records,
+        selected_device_id=1,
+        status=status,
+        outages_30d=_NO_OUTAGES_30D,
+    )
 
     assert view.stale is True
     assert view.age_s == 9000
+
+
+def test_a_fresh_sample_reports_power_flows_battery_health_and_last_update() -> None:
+    """UI-04/UI-05 (qa-report-ui-01.md): the overview's bento tiles were
+    mostly empty even though every one of these values already exists
+    on the latest sample. A defect that dropped a field during the
+    reshape, or read it from the wrong `Reading` attribute, would
+    starve a tile of data it could have shown."""
+    records = (_device(1, "BA31ZEB1SF7F0001"),)
+    status = DeviceStatus(
+        device_id=1,
+        ts=5000,
+        age_s=12,
+        stale=False,
+        grid="present",
+        reading=Reading(
+            soc=80,
+            solar_in_w=300.0,
+            ac_in_w=0.0,
+            ac_out_w=150.0,
+            batt_in_w=150.0,
+            batt_out_w=0.0,
+            soh=97.5,
+            cycles=42,
+            chg_remain_min=90,
+        ),
+        outage=_NO_OUTAGE,
+    )
+
+    view = build_overview_view_model(
+        device_records=records,
+        selected_device_id=1,
+        status=status,
+        outages_30d=_NO_OUTAGES_30D,
+    )
+
+    assert view.last_update_ts == 5000
+    assert view.solar_in_w == 300.0
+    assert view.ac_in_w == 0.0
+    assert view.ac_out_w == 150.0
+    assert view.soh == 97.5
+    assert view.cycles == 42
+    assert view.battery_power == BatteryPowerStatus(
+        direction="charging", net_w=150.0, remaining_min=90
+    )
+
+
+def test_a_device_with_no_recorded_sample_reports_every_new_field_as_unavailable() -> None:
+    """Named Defect "missing read as zero": with no sample at all, every
+    one of the new power-flow/battery-health fields must be `None`, not
+    a fabricated `0` or an empty-but-truthy `BatteryPowerStatus`."""
+    records = (_device(1, "BA31ZEB1SF7F0001"),)
+    status = DeviceStatus(
+        device_id=1,
+        ts=None,
+        age_s=None,
+        stale=False,
+        grid="unknown",
+        reading=None,
+        outage=_NO_OUTAGE,
+    )
+
+    view = build_overview_view_model(
+        device_records=records,
+        selected_device_id=1,
+        status=status,
+        outages_30d=_NO_OUTAGES_30D,
+    )
+
+    assert view.last_update_ts is None
+    assert view.solar_in_w is None
+    assert view.ac_in_w is None
+    assert view.ac_out_w is None
+    assert view.soh is None
+    assert view.cycles is None
+    assert view.battery_power is None
+
+
+def test_the_30_day_outage_summary_is_propagated_from_the_caller_unmodified() -> None:
+    """UI-04/UI-05: the overview's outage tiles (count, longest outage,
+    time on battery) must reflect the real pre-computed 30-day summary
+    the route builds through the same `outages.aggregates` pipeline the
+    outages page already uses -- a defect that dropped or recomputed it
+    here would show a stale or fabricated figure."""
+    records = (_device(1, "BA31ZEB1SF7F0001"),)
+    status = DeviceStatus(
+        device_id=1,
+        ts=None,
+        age_s=None,
+        stale=False,
+        grid="unknown",
+        reading=None,
+        outage=_NO_OUTAGE,
+    )
+    summary = OutagesSummary(
+        count=3, total_downtime_s=900, longest_s=500, mean_s=300, brief_count=1, unknown_time_s=20
+    )
+
+    view = build_overview_view_model(
+        device_records=records,
+        selected_device_id=1,
+        status=status,
+        outages_30d=summary,
+    )
+
+    assert view.outages_30d == summary
 
 
 def test_outages_summary_reports_count_total_longest_mean_brief_and_unknown_time() -> None:

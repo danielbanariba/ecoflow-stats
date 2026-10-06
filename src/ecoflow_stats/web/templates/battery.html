@@ -17,8 +17,30 @@
     {% if view.current_soc is not none %}
     <div class="hero-tile__battery mt-6">
       {{ macros.battery_ring(view.current_soc, 'battery-ring', t('live.ring_label'), t('live.ring_aria').format(percent=view.current_soc)) }}
+      {#
+        UI-02 (qa-report-ui-01.md): this used to repeat the exact same
+        charge percentage the ring already shows. See
+        `partials/live.html`'s own fix for the full rationale -- this
+        mirrors it exactly, reusing the same `battery_power` shape.
+      #}
       <div class="hero-tile__battery-copy">
-        <span class="value-lg num">{{ view.current_soc }}%</span>
+        {% if view.battery_power is not none and view.battery_power.direction is not none %}
+        <span class="value-lg">
+          {{ t('live.battery_power.' ~ view.battery_power.direction) }}
+          {% if view.battery_power.direction != 'idle' %}
+            · {{ t('live.battery_power.net_watts').format(watts=(view.battery_power.net_w | abs | round(0, 'common') | int)) }}
+          {% endif %}
+          {% if view.battery_power.remaining_min is not none %}
+            {% if view.battery_power.direction == 'charging' %}
+              · {{ t('live.battery_power.remaining_charging').format(minutes=view.battery_power.remaining_min) }}
+            {% elif view.battery_power.direction == 'discharging' %}
+              · {{ t('live.battery_power.remaining_discharging').format(minutes=view.battery_power.remaining_min) }}
+            {% endif %}
+          {% endif %}
+        </span>
+        {% else %}
+        <span class="value-lg text-muted">{{ t('common.unavailable') }}</span>
+        {% endif %}
       </div>
     </div>
     {% else %}

@@ -29,15 +29,93 @@
     </div>
   </div>
 
+  {#
+    UI-04 (qa-report-ui-01.md): current power flows straight off the
+    latest sample -- battery in/out is deliberately NOT repeated here;
+    it already gets its own richer charging/discharging/remaining-time
+    narrative below (UI-02), so showing its bare watt figure a second
+    time here would recreate the exact kind of duplication this batch
+    fixes elsewhere.
+  #}
+  <div class="hero-tile__metrics">
+    <div class="metric">
+      <span class="metric__label">{{ t('live.metrics.solar_in') }}</span>
+      <span class="metric__value metric__value--solar num">{% if view.solar_in_w is not none %}{{ view.solar_in_w | round(0, 'common') | int }} W{% else %}{{ t('common.unavailable') }}{% endif %}</span>
+    </div>
+    <div class="metric">
+      <span class="metric__label">{{ t('live.metrics.grid_in') }}</span>
+      <span class="metric__value num">{% if view.ac_in_w is not none %}{{ view.ac_in_w | round(0, 'common') | int }} W{% else %}{{ t('common.unavailable') }}{% endif %}</span>
+    </div>
+    <div class="metric">
+      <span class="metric__label">{{ t('live.metrics.ac_out') }}</span>
+      <span class="metric__value num">{% if view.ac_out_w is not none %}{{ view.ac_out_w | round(0, 'common') | int }} W{% else %}{{ t('common.unavailable') }}{% endif %}</span>
+    </div>
+  </div>
+
   <div class="hero-tile__battery">
     {% if view.soc is not none %}
     {{ macros.battery_ring(view.soc, 'overview-ring', t('live.ring_label'), t('live.ring_aria').format(percent=view.soc)) }}
     {% endif %}
     <div class="hero-tile__battery-copy">
       <span class="eyebrow">{{ t('live.soc.label') }}</span>
-      <span class="value-lg num">{% if view.soc is not none %}{{ view.soc }}%{% else %}{{ t('common.unavailable') }}{% endif %}</span>
+      {#
+        UI-02 (qa-report-ui-01.md): this used to repeat the exact same
+        charge percentage the ring already shows. It now shows what the
+        ring cannot: charging/discharging direction, net battery
+        watts, and -- only when the device itself reports one -- an
+        estimated time to full or empty.
+      #}
+      {% if view.battery_power is not none and view.battery_power.direction is not none %}
+      <span class="value-lg">
+        {{ t('live.battery_power.' ~ view.battery_power.direction) }}
+        {% if view.battery_power.direction != 'idle' %}
+          · {{ t('live.battery_power.net_watts').format(watts=(view.battery_power.net_w | abs | round(0, 'common') | int)) }}
+        {% endif %}
+        {% if view.battery_power.remaining_min is not none %}
+          {% if view.battery_power.direction == 'charging' %}
+            · {{ t('live.battery_power.remaining_charging').format(minutes=view.battery_power.remaining_min) }}
+          {% elif view.battery_power.direction == 'discharging' %}
+            · {{ t('live.battery_power.remaining_discharging').format(minutes=view.battery_power.remaining_min) }}
+          {% endif %}
+        {% endif %}
+      </span>
+      {% else %}
+      <span class="value-lg text-muted">{{ t('common.unavailable') }}</span>
+      {% endif %}
     </div>
   </div>
+</div>
+
+{#
+  UI-04/UI-05 (qa-report-ui-01.md): the overview's bento used to be
+  mostly empty past the hero tile. These six stat tiles are part of
+  this same auto-refreshing partial (not `overview.html`'s outer
+  section) so they survive every 30s HTMX poll instead of vanishing
+  after the first refresh.
+#}
+<div class="tile tile--span-4 reveal">
+  <p class="stat-tile__label">{{ t('battery.trend.table.soh') }}</p>
+  <p class="stat-tile__value stat-tile--accent-battery">{% if view.soh is not none %}<span class="num">{{ view.soh }}%</span>{% else %}{{ t('common.unavailable') }}{% endif %}</p>
+</div>
+<div class="tile tile--span-4 reveal">
+  <p class="stat-tile__label">{{ t('battery.trend.table.cycles') }}</p>
+  <p class="stat-tile__value">{% if view.cycles is not none %}<span class="num">{{ view.cycles }}</span>{% else %}{{ t('common.unavailable') }}{% endif %}</p>
+</div>
+<div class="tile tile--span-4 reveal">
+  <p class="stat-tile__label">{{ t('overview.tile.last_update') }}</p>
+  <p class="stat-tile__value">{% if view.last_update_ts is not none %}{{ format_local_dt(view.last_update_ts, tz) }}{% else %}{{ t('common.unavailable') }}{% endif %}</p>
+</div>
+<div class="tile tile--span-4 reveal">
+  <p class="stat-tile__label">{{ t('overview.tile.outages_30d') }}</p>
+  <p class="stat-tile__value stat-tile--accent-outage"><span class="num">{{ view.outages_30d.count }}</span></p>
+</div>
+<div class="tile tile--span-4 reveal">
+  <p class="stat-tile__label">{{ t('overview.tile.longest_outage') }}</p>
+  <p class="stat-tile__value stat-tile--accent-outage">{% if view.outages_30d.longest_s is not none %}{{ t('outages.summary.seconds_value').format(seconds=view.outages_30d.longest_s) }}{% else %}{{ t('common.unavailable') }}{% endif %}</p>
+</div>
+<div class="tile tile--span-4 reveal">
+  <p class="stat-tile__label">{{ t('overview.tile.time_on_battery') }}</p>
+  <p class="stat-tile__value stat-tile--accent-grid">{{ t('outages.summary.seconds_value').format(seconds=view.outages_30d.total_downtime_s) }}</p>
 </div>
 {% else %}
 <div class="tile tile--span-12 empty-state reveal" role="status">

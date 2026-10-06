@@ -142,6 +142,52 @@ def depth_of_discharge(event: Event) -> int | Literal["unavailable"]:
     return event.soc_start - event.soc_min
 
 
+@dataclass(frozen=True, slots=True)
+class BatteryPowerStatus:
+    """Battery power context for "right now" (UI-02, qa-report-ui-01.md:
+    the overview and battery pages showed the charge percentage twice
+    -- once inside the activity ring, once in adjacent text, using the
+    exact same figure). The adjacent text now shows what the ring
+    cannot: whether the battery is charging or discharging, its net
+    power, and -- only when the device itself reports one -- an
+    estimated time to full or empty.
+    """
+
+    direction: Literal["charging", "discharging", "idle"] | None
+    """`None` when the device did not report enough to compute a net
+    power at all (Named Defect "missing read as zero": never guessed
+    from a one-sided reading)."""
+    net_w: float | None
+    """`batt_in_w - batt_out_w`. Positive while charging, negative while
+    discharging, exactly `0.0` at idle -- `None` only when either side
+    of the pair is itself `None`."""
+    remaining_min: int | None
+    """The device's own `chg_remain_min` while charging or
+    `dsg_remain_min` while discharging -- never the other direction's
+    estimate, and never fabricated when idle or unavailable."""
+
+
+def battery_power_status(reading: Reading) -> BatteryPowerStatus:
+    """Derive `reading`'s current charging/discharging direction, net
+    battery power, and remaining-time estimate, purely from fields the
+    device already reported on this one sample -- no new query, no
+    smoothing, no estimation beyond what `reading` itself carries.
+    """
+    if reading.batt_in_w is None or reading.batt_out_w is None:
+        return BatteryPowerStatus(direction=None, net_w=None, remaining_min=None)
+
+    net_w = reading.batt_in_w - reading.batt_out_w
+    if net_w > 0:
+        return BatteryPowerStatus(
+            direction="charging", net_w=net_w, remaining_min=reading.chg_remain_min
+        )
+    if net_w < 0:
+        return BatteryPowerStatus(
+            direction="discharging", net_w=net_w, remaining_min=reading.dsg_remain_min
+        )
+    return BatteryPowerStatus(direction="idle", net_w=net_w, remaining_min=None)
+
+
 def battery_trend(days: Sequence[DailyBatteryTrend]) -> list[DailyBatteryTrend]:
     """The cycle-count and state-of-health trend across the retained
     rollup history, in day order (battery requirement "Cycle Count and
@@ -157,8 +203,10 @@ def battery_trend(days: Sequence[DailyBatteryTrend]) -> list[DailyBatteryTrend]:
 
 
 __all__ = [
+    "BatteryPowerStatus",
     "ChargePoint",
     "DailyBatteryTrend",
+    "battery_power_status",
     "battery_trend",
     "bucket_charge_history",
     "charge_history",

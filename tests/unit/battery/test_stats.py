@@ -9,8 +9,10 @@ on a NULL boundary state of charge); design-data section 4.6.
 from __future__ import annotations
 
 from ecoflow_stats.battery.stats import (
+    BatteryPowerStatus,
     ChargePoint,
     DailyBatteryTrend,
+    battery_power_status,
     battery_trend,
     bucket_charge_history,
     charge_history,
@@ -165,3 +167,52 @@ def test_battery_trend_reflects_the_devices_own_progression_in_day_order() -> No
     assert [point.day for point in trend] == ["2026-10-01", "2026-10-02"]
     assert [point.cycles_last for point in trend] == [10, 11]
     assert [point.soh_last for point in trend] == [98.0, 97.0]
+
+
+def test_battery_power_status_reports_the_sign_of_net_power_as_a_direction() -> None:
+    """UI-02 (qa-report-ui-01.md): the overview and battery pages showed
+    the battery's charge percentage twice (the ring, and adjacent text)
+    -- the adjacent text now shows what the ring cannot: whether the
+    battery is charging or discharging right now. A defect that
+    mislabeled the direction (e.g. always "charging", or comparing the
+    wrong sign) would show the opposite of what is actually happening."""
+    charging = battery_power_status(Reading(batt_in_w=100.0, batt_out_w=0.0, chg_remain_min=30))
+    assert charging == BatteryPowerStatus(direction="charging", net_w=100.0, remaining_min=30)
+
+    discharging = battery_power_status(Reading(batt_in_w=0.0, batt_out_w=250.0, dsg_remain_min=45))
+    assert discharging == BatteryPowerStatus(
+        direction="discharging", net_w=-250.0, remaining_min=45
+    )
+
+    idle = battery_power_status(Reading(batt_in_w=0.0, batt_out_w=0.0))
+    assert idle == BatteryPowerStatus(direction="idle", net_w=0.0, remaining_min=None)
+
+
+def test_battery_power_status_reports_unavailable_rather_than_a_fabricated_net_power() -> None:
+    """Named Defect "missing read as zero": a defect that treated a
+    missing `batt_in_w`/`batt_out_w` as `0` would fabricate a net
+    reading (e.g. claim "idle") instead of admitting the device did not
+    report enough to compute one -- even when only ONE side of the pair
+    is missing, the other side alone cannot honestly produce a net."""
+    both_missing = battery_power_status(Reading(batt_in_w=None, batt_out_w=None))
+    assert both_missing == BatteryPowerStatus(direction=None, net_w=None, remaining_min=None)
+
+    one_sided = battery_power_status(Reading(batt_in_w=100.0, batt_out_w=None))
+    assert one_sided == BatteryPowerStatus(direction=None, net_w=None, remaining_min=None)
+
+
+def test_battery_power_status_omits_remaining_time_the_device_does_not_report() -> None:
+    """UI-02's "time to full/empty when the device reports it" is
+    conditional: a defect that fabricated a remaining-time guess, or
+    read the wrong field for the current direction (e.g. showing
+    `dsg_remain_min` while charging), would show false precision or the
+    wrong estimate next to the ring."""
+    charging_no_estimate = battery_power_status(
+        Reading(batt_in_w=100.0, batt_out_w=0.0, chg_remain_min=None, dsg_remain_min=99)
+    )
+    assert charging_no_estimate.remaining_min is None
+
+    discharging_uses_its_own_field = battery_power_status(
+        Reading(batt_in_w=0.0, batt_out_w=50.0, chg_remain_min=15, dsg_remain_min=120)
+    )
+    assert discharging_uses_its_own_field.remaining_min == 120

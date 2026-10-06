@@ -733,6 +733,44 @@ section + section {
   .hero-tile__device {
     text-align: left;
   }
+  .hero-tile__metrics {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------- Hero power-flow metrics (UI-02/UI-04, overview) ---------- */
+.hero-tile__metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-4);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.metric__label {
+  font-size: var(--text-micro);
+  color: var(--text-muted);
+  font-weight: 560;
+}
+
+.metric__value {
+  font-size: var(--text-h3);
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.metric__value--solar {
+  color: var(--solar);
+}
+
+.metric__value--battery {
+  color: var(--battery-warm);
 }
 
 .hero-tile__battery {
@@ -840,6 +878,14 @@ section + section {
 
 .stat-tile--accent-battery .stat-tile__value {
   color: var(--battery-warm);
+}
+
+.stat-tile--accent-outage .stat-tile__value {
+  color: var(--outage);
+}
+
+.stat-tile--accent-grid .stat-tile__value {
+  color: var(--grid-present);
 }
 
 /* ---------- Summary stat grid (outages page) ---------- */

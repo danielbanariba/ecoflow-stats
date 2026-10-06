@@ -340,6 +340,32 @@ def test_the_right_now_tiles_show_the_latest_charge_soh_and_cycles(
         application.database.close()
 
 
+def test_the_right_now_battery_copy_shows_charging_context_not_a_repeated_percentage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UI-02 (qa-report-ui-01.md): the text beside the ring used to
+    repeat the exact same charge percentage the ring itself already
+    renders. A defect that reverted it back to a bare `{soc}%` (instead
+    of the charging/discharging direction, net watts, and remaining
+    time from the latest sample's own `Reading`) would resurface the
+    same complaint."""
+    samples = [
+        (_RANGE_START + 100, Reading(soc=70, batt_in_w=0.0, batt_out_w=80.0, dsg_remain_min=240)),
+    ]
+    application, _device_id, client = _client(monkeypatch, tmp_path, samples=samples)
+    try:
+        with client:
+            html = client.get("/battery").text
+
+        assert 'class="ring-center__value num">70%</span>' in html
+        assert "Discharging" in html
+        assert "80 W" in html
+        assert "240 min remaining" in html
+        assert '<span class="value-lg num">70%</span>' not in html
+    finally:
+        application.database.close()
+
+
 def test_the_trend_table_renders_rollup_rows_in_day_order(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

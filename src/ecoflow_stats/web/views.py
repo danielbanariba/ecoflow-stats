@@ -15,6 +15,8 @@ from zoneinfo import ZoneInfo
 
 from ecoflow_stats.battery.service import observed_autonomy
 from ecoflow_stats.battery.stats import (
+    BatteryPowerStatus,
+    battery_power_status,
     battery_trend,
     bucket_charge_history,
     charge_history,
@@ -53,6 +55,28 @@ class OverviewViewModel:
     age_s: int | None
     grid: str
     soc: int | None
+    last_update_ts: int | None
+    """The latest sample's own timestamp (UI-04/UI-05, qa-report-ui-01.md)
+    -- `None` only when `has_data` is `False`, never a fabricated "now"."""
+    solar_in_w: float | None
+    ac_in_w: float | None
+    ac_out_w: float | None
+    """Current power flows from the latest sample (UI-04), straight off
+    `Reading` -- `None` means the device did not report that field,
+    never a fabricated `0`."""
+    battery_power: BatteryPowerStatus | None
+    """`None` only when there is no reading at all; see
+    `battery.stats.battery_power_status` for why a one-sided reading
+    also yields a `None` direction/net inside this value."""
+    soh: float | None
+    cycles: int | None
+    """Battery health straight off the latest sample (UI-04) -- not the
+    range-aggregated rollup trend `battery.html` shows, since the
+    overview has no date range to aggregate over."""
+    outages_30d: OutagesSummary
+    """The same `OutagesSummary` shape the outages page's own summary
+    uses, computed by the caller over a fixed trailing 30 days (UI-05)
+    -- never recomputed here, only reshaped alongside everything else."""
 
 
 def device_label(record: DeviceRecord) -> str:
@@ -80,10 +104,18 @@ def build_overview_view_model(
     device_records: tuple[DeviceRecord, ...],
     selected_device_id: int,
     status: DeviceStatus,
+    outages_30d: OutagesSummary,
 ) -> OverviewViewModel:
     """web-ui "Empty and Stale States Are Shown Explicitly": `has_data`
     is false only when the device has no recorded sample at all
-    (`status.ts is None`), never inferred from a zero-valued reading."""
+    (`status.ts is None`), never inferred from a zero-valued reading.
+
+    `outages_30d` is already computed by the caller (the same
+    `outages.aggregates`/`resolve` pipeline `outages_page` uses, over a
+    fixed trailing 30-day window) -- this function only reshapes
+    already-fetched data, it never queries storage on its own.
+    """
+    reading = status.reading
     return OverviewViewModel(
         devices=build_device_options(device_records, selected_device_id=selected_device_id),
         selected_device_id=selected_device_id,
@@ -91,7 +123,15 @@ def build_overview_view_model(
         stale=status.stale,
         age_s=status.age_s,
         grid=status.grid,
-        soc=status.reading.soc if status.reading is not None else None,
+        soc=reading.soc if reading is not None else None,
+        last_update_ts=status.ts,
+        solar_in_w=reading.solar_in_w if reading is not None else None,
+        ac_in_w=reading.ac_in_w if reading is not None else None,
+        ac_out_w=reading.ac_out_w if reading is not None else None,
+        battery_power=battery_power_status(reading) if reading is not None else None,
+        soh=reading.soh if reading is not None else None,
+        cycles=reading.cycles if reading is not None else None,
+        outages_30d=outages_30d,
     )
 
 
@@ -411,6 +451,12 @@ class BatteryViewModel:
     current_cycles: int | None
     """Same snapshot derivation as `current_soc`, from the most recent
     already-fetched `trend_rows` day."""
+    battery_power: BatteryPowerStatus | None
+    """UI-02 (qa-report-ui-01.md): the same charging/discharging/net-
+    watts/remaining-time context the overview's hero now shows, derived
+    from the exact same latest-by-`ts` already-fetched `samples` entry
+    `current_soc` itself comes from -- `None` only when the range has
+    no sample at all."""
 
 
 def build_battery_dod_row(event: Event) -> BatteryDodRow:
@@ -479,6 +525,8 @@ def build_battery_view_model(
     first without scrolling.
     """
     ordered_events = sorted(outage_events, key=lambda event: event.start_ts, reverse=True)
+    sorted_samples = sorted(samples, key=lambda pair: pair[0])
+    latest_reading = sorted_samples[-1][1] if sorted_samples else None
     charge_points = charge_history(samples)
     # DATA-04/UI-14: the fallback <details> table is bucketed/bounded
     # (qa-report-data-01.md/qa-report-ui-01.md) -- the chart's own live
@@ -509,6 +557,7 @@ def build_battery_view_model(
         current_soc=charge_points[-1].soc if charge_points else None,
         current_soh=latest_trend_day.soh_last if latest_trend_day is not None else None,
         current_cycles=latest_trend_day.cycles_last if latest_trend_day is not None else None,
+        battery_power=battery_power_status(latest_reading) if latest_reading is not None else None,
     )
 
 

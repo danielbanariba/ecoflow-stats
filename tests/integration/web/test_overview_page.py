@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,6 +22,8 @@ from ecoflow_stats import bootstrap
 from ecoflow_stats.config import load_settings
 from ecoflow_stats.devices.reading import Reading
 from ecoflow_stats.jobs import SupervisedTask, SupervisedTaskHandle
+from ecoflow_stats.outages.model import Event
+from ecoflow_stats.storage.outages import OutageStore
 from ecoflow_stats.web.app import create_app
 from tests.fakes import FakeClock
 
@@ -247,5 +250,111 @@ def test_the_device_choice_persists_via_cookie_across_a_second_request(
 
         assert "20%" in response.text
         assert "81%" not in response.text
+    finally:
+        application.database.close()
+
+
+def test_the_overview_shows_real_power_flows_battery_health_and_outage_tiles(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UI-02/UI-04/UI-05 (qa-report-ui-01.md): the overview's bento was
+    mostly empty even though every one of these values already exists
+    on the latest sample or in the existing outage-derivation pipeline
+    `outages_page` already calls. A defect that dropped a tile, wired
+    it to the wrong `Reading` field, or left it hardcoded, would either
+    show nothing or misreport the device's actual state."""
+    application = _build(monkeypatch, tmp_path, devices="TESTDEV0001")
+    try:
+        (device,) = application.device_records
+        application.sample_store.add(
+            device.id,
+            _NOW_TS - 60,
+            1,
+            Reading(
+                soc=80,
+                grid_v=120.0,
+                solar_in_w=300.0,
+                ac_in_w=120.0,
+                ac_out_w=150.0,
+                batt_in_w=150.0,
+                batt_out_w=0.0,
+                soh=97.5,
+                cycles=42,
+                chg_remain_min=90,
+            ),
+        )
+        outage_store = OutageStore(application.database.writer)
+        outage_store.replace_from(
+            device.id,
+            None,
+            [Event(start_ts=_NOW_TS - 3600, end_ts=_NOW_TS - 3000, kind="outage")],
+            [],
+        )
+        application.database.writer.commit()
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
+
+        with TestClient(app) as client:
+            response = client.get("/")
+
+        assert response.status_code == 200
+        html = response.text
+        assert "300 W" in html  # solar in
+        assert "120 W" in html  # grid in
+        assert "150 W" in html  # AC load out / net battery power (both 150 W here)
+        assert "Charging" in html
+        assert "90 min to full" in html
+        assert "97.5%" in html  # state of health
+        assert ">42<" in html  # cycles
+        assert "600s" in html  # longest outage == total downtime (one 600s event)
+    finally:
+        application.database.close()
+
+
+def test_the_overview_never_shows_a_missing_value_as_a_fabricated_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Named Defect "missing read as zero": a device that reports a
+    reading at all, but none of the new power-flow/battery-health
+    fields on it, must show every one of those tiles as unavailable --
+    a defect defaulting an absent field to `0` before display would
+    fabricate a measurement the device never reported (e.g. "0 W solar"
+    implies "confirmed no sun", not "this device has no solar input
+    sensor")."""
+    application = _build(monkeypatch, tmp_path, devices="TESTDEV0001")
+    try:
+        (device,) = application.device_records
+        application.sample_store.add(device.id, _NOW_TS - 60, 1, Reading(soc=80, grid_v=120.0))
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
+
+        with TestClient(app) as client:
+            response = client.get("/")
+
+        assert response.status_code == 200
+        html = response.text
+        assert "0 W" not in html
+        cycles_tile = re.search(
+            r'<p class="stat-tile__label">Cycles</p>\s*<p class="stat-tile__value">(.*?)</p>',
+            html,
+        )
+        assert cycles_tile is not None
+        assert cycles_tile.group(1) == "Unavailable"  # never a fabricated 0
+        soh_tile = re.search(
+            r'<p class="stat-tile__label">State of health</p>'
+            r'\s*<p class="stat-tile__value stat-tile--accent-battery">(.*?)</p>',
+            html,
+        )
+        assert soh_tile is not None
+        assert soh_tile.group(1) == "Unavailable"  # never a fabricated 0%
+        assert html.count("Unavailable") >= 4  # solar/grid-in/AC-out/battery-power/SoH/cycles
     finally:
         application.database.close()

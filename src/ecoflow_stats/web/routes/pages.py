@@ -45,7 +45,9 @@ from ecoflow_stats.web.security import (
     verify_password,
 )
 from ecoflow_stats.web.views import (
+    OverviewViewModel,
     build_battery_view_model,
+    build_outages_summary,
     build_outages_view_model,
     build_overview_view_model,
     format_local_dt,
@@ -57,6 +59,7 @@ if TYPE_CHECKING:
     from ecoflow_stats.outages.model import DetectorConfig
     from ecoflow_stats.ports import OutageStore, SampleStore
     from ecoflow_stats.storage.devices import DeviceRecord
+    from ecoflow_stats.web.routes.api import ApiContext
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 TEMPLATES = Jinja2Templates(directory=str(_TEMPLATES_DIR))
@@ -73,6 +76,10 @@ _BATTERY_DEFAULT_RANGE_S = 7 * 24 * 60 * 60
 """Same trailing-7-days default as `_OUTAGES_DEFAULT_RANGE_S`, kept as
 its own name rather than reused so the battery page's range can change
 independently later without an unrelated rename."""
+_OVERVIEW_OUTAGES_WINDOW_S = 30 * 24 * 60 * 60
+"""Fixed 30-day lookback for the overview's outage tiles (UI-04/UI-05,
+qa-report-ui-01.md) -- unlike `outages_page`, the overview has no
+`from`/`to` range selector, so this window is not user-adjustable."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +121,15 @@ def _show_logout(request: Request, security: SecurityContext) -> bool:
     return security.password is not None and has_valid_session(request, security)
 
 
-def _live_view(ctx: PagesContext, device_id: int) -> object:
+def _live_view(ctx: PagesContext, api_ctx: ApiContext, device_id: int) -> OverviewViewModel:
+    """Builds the overview's full view model, including its fixed
+    30-day outage summary (UI-04/UI-05) -- reuses the exact same
+    `resolve`/`compute_aggregates`/`build_outages_summary` pipeline
+    `outages_page` already calls, over `_OVERVIEW_OUTAGES_WINDOW_S`
+    instead of a user-selected range. `api_ctx` is read cross-context
+    (same convention `outages_page` already uses for
+    `request.app.state.api`) rather than adding `decision_store`/`tz`
+    to `PagesContext`."""
     status = get_status(
         device_id,
         sample_store=ctx.sample_store,
@@ -124,18 +139,42 @@ def _live_view(ctx: PagesContext, device_id: int) -> object:
         poll_interval_s=ctx.poll_interval_s,
         config=ctx.detector_config,
     )
+    range_end = int(ctx.now().timestamp())
+    range_start = range_end - _OVERVIEW_OUTAGES_WINDOW_S
+    events = ctx.outage_store.events(device_id, range_start, range_end)
+    gaps = ctx.outage_store.gaps(device_id, range_start, range_end)
+    decisions = (
+        api_ctx.decision_store.active(device_id) if api_ctx.decision_store is not None else []
+    )
+    resolved = resolve(
+        detected=events, gaps=gaps, legacy=(), decisions=decisions, range_end=range_end
+    )
+    aggregates = compute_aggregates(
+        outages=resolved.outages, range_start=range_start, range_end=range_end, tz=api_ctx.tz
+    )
+    outages_30d = build_outages_summary(
+        aggregates=aggregates,
+        briefs=resolved.briefs,
+        gaps=gaps,
+        range_start=range_start,
+        range_end=range_end,
+    )
     return build_overview_view_model(
-        device_records=ctx.device_records, selected_device_id=device_id, status=status
+        device_records=ctx.device_records,
+        selected_device_id=device_id,
+        status=status,
+        outages_30d=outages_30d,
     )
 
 
 @router.get("/", response_class=HTMLResponse)
 def overview_page(request: Request, device: int | None = None) -> HTMLResponse:
     ctx: PagesContext = request.app.state.pages
+    api_ctx: ApiContext = request.app.state.api
     security: SecurityContext = request.app.state.security
     lang = _resolve_lang(request, ctx)
     selected_id = _resolve_device(request, ctx, device)
-    view = _live_view(ctx, selected_id)
+    view = _live_view(ctx, api_ctx, selected_id)
     csrf_cookie, csrf_cookie_is_new = csrf_cookie_value(request)
     response = TEMPLATES.TemplateResponse(
         request,
@@ -145,6 +184,7 @@ def overview_page(request: Request, device: int | None = None) -> HTMLResponse:
             "lang": lang,
             "html_lang": html_lang(lang),
             "view": view,
+            "tz": api_ctx.tz,
             "csrf_token": csrf_token(security.app_secret, csrf_cookie),
             "active_nav": "overview",
             "show_logout": _show_logout(request, security),
@@ -159,11 +199,14 @@ def overview_page(request: Request, device: int | None = None) -> HTMLResponse:
 @router.get("/partials/live", response_class=HTMLResponse)
 def live_partial(request: Request, device: int | None = None) -> HTMLResponse:
     ctx: PagesContext = request.app.state.pages
+    api_ctx: ApiContext = request.app.state.api
     lang = _resolve_lang(request, ctx)
     selected_id = _resolve_device(request, ctx, device)
-    view = _live_view(ctx, selected_id)
+    view = _live_view(ctx, api_ctx, selected_id)
     return TEMPLATES.TemplateResponse(
-        request, "partials/live.html", {"t": translator(lang, _CATALOGS), "view": view}
+        request,
+        "partials/live.html",
+        {"t": translator(lang, _CATALOGS), "view": view, "tz": api_ctx.tz},
     )
 
 

@@ -19,9 +19,10 @@ what another capability already wrote there.
 
 Reads mirror this same column-scoping: :meth:`RollupStore.get`/
 :meth:`between` return only the battery-field subset (``DailyRollup``);
-:meth:`grid_between` (task 20.2's reader half) returns its own
-capability-scoped ``DailyGridRollup``, rather than one dataclass
-carrying every column a caller may not need.
+:meth:`grid_between` (task 20.2's reader half) and :meth:`energy_between`
+(task 19.1's reader half) each return their own capability-scoped
+dataclass, rather than one dataclass carrying every column a caller
+may not need.
 """
 
 from __future__ import annotations
@@ -54,6 +55,39 @@ def _row_to_rollup(row: sqlite3.Row) -> DailyRollup:
         cycles_last=row["cycles_last"],
         soh_last=row["soh_last"],
         batt_temp_max=row["batt_temp_max"],
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class DailyEnergyRollup:
+    """The energy-field subset of one ``daily_rollups`` row (task
+    19.1's reader half). The 5 Wh fields are ``None`` only when
+    `upsert_energy` never ran for that day at all (a day with no
+    counter activity); ``chg_ac_est_wh``/``energy_flags`` are always
+    present (the columns' own ``NOT NULL DEFAULT 0``)."""
+
+    device_id: int
+    day: str
+    chg_ac_wh: float | None
+    chg_dc_wh: float | None
+    chg_solar_wh: float | None
+    dsg_ac_wh: float | None
+    dsg_dc_wh: float | None
+    chg_ac_est_wh: float
+    energy_flags: int
+
+
+def _row_to_energy_rollup(row: sqlite3.Row) -> DailyEnergyRollup:
+    return DailyEnergyRollup(
+        device_id=row["device_id"],
+        day=row["day"],
+        chg_ac_wh=row["chg_ac_wh"],
+        chg_dc_wh=row["chg_dc_wh"],
+        chg_solar_wh=row["chg_solar_wh"],
+        dsg_ac_wh=row["dsg_ac_wh"],
+        dsg_dc_wh=row["dsg_dc_wh"],
+        chg_ac_est_wh=row["chg_ac_est_wh"],
+        energy_flags=row["energy_flags"],
     )
 
 
@@ -265,5 +299,21 @@ class RollupStore:
         ).fetchall()
         return [_row_to_grid_rollup(row) for row in rows]
 
+    def energy_between(
+        self, device_id: int, start_day: str, end_day: str
+    ) -> list[DailyEnergyRollup]:
+        """Return a device's energy-field rollup rows within
+        ``[start_day, end_day]`` (inclusive, ``'YYYY-MM-DD'`` strings),
+        in day order -- the energy-field-scoped sibling of `between`
+        (`web.routes.api`'s `energy/daily` route, task 19.1's API
+        half)."""
+        rows = self._conn.execute(
+            "SELECT device_id, day, chg_ac_wh, chg_dc_wh, chg_solar_wh, dsg_ac_wh, dsg_dc_wh,"
+            " chg_ac_est_wh, energy_flags"
+            " FROM daily_rollups WHERE device_id = ? AND day BETWEEN ? AND ? ORDER BY day",
+            (device_id, start_day, end_day),
+        ).fetchall()
+        return [_row_to_energy_rollup(row) for row in rows]
 
-__all__ = ["DailyGridRollup", "DailyRollup", "RollupStore"]
+
+__all__ = ["DailyEnergyRollup", "DailyGridRollup", "DailyRollup", "RollupStore"]

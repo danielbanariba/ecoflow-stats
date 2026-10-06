@@ -74,6 +74,16 @@ def _encode_energy_flags(flags: frozenset[str]) -> int:
     return sum(_ENERGY_FLAG_BITS[flag] for flag in flags)
 
 
+def decode_energy_flags(flags: int) -> frozenset[str]:
+    """The inverse of `_encode_energy_flags`: which flag names a stored
+    `energy_flags` bitmask represents, exactly as `energy.accounting.
+    DailyEnergy.flags` originally reported them -- `web.routes.api`'s
+    `energy/daily` route (task 19.1's API half) needs this to show
+    `counter_reset`/`implausible_jump`/`gap_prorated` per row without
+    duplicating this module's bit assignment in the web layer."""
+    return frozenset(name for name, bit in _ENERGY_FLAG_BITS.items() if flags & bit)
+
+
 def _params_hash() -> str:
     """A fingerprint of the configurable parameters that change a daily
     rollup's output, mirroring `outages.service._params_hash`'s role for
@@ -282,4 +292,4 @@ def derive_rollups(
     return True
 
 
-__all__ = ["derive_rollups"]
+__all__ = ["decode_energy_flags", "derive_rollups"]

@@ -158,6 +158,8 @@ def _build_api_context(application: Application) -> ApiContext:
         device_records=application.device_records,
         decision_store=DecisionStore(application.database.writer),
         tz=application.settings.tz,
+        tariff=application.settings.tariff,
+        currency=application.settings.currency,
     )
 
 

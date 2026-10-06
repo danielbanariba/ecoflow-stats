@@ -29,6 +29,7 @@ from ecoflow_stats.grid.quality import grid_quality_range
 from ecoflow_stats.live_status.service import get_status
 from ecoflow_stats.outages.aggregates import compute_aggregates
 from ecoflow_stats.outages.resolve import resolve, unresolved_gaps
+from ecoflow_stats.rollups.service import decode_energy_flags
 from ecoflow_stats.storage.rollups import RollupStore
 from ecoflow_stats.timeutil import local_day
 
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
     from ecoflow_stats.outages.resolve import EffectiveOutage, EffectiveView
     from ecoflow_stats.ports import DecisionStore, OutageStore, SampleStore
     from ecoflow_stats.storage.devices import DeviceRecord
+    from ecoflow_stats.storage.rollups import DailyEnergyRollup
 
 _SCHEMA = "ecoflow-stats.status/v1"
 _OUTAGES_SCHEMA = "ecoflow-stats.outages/v1"
@@ -52,6 +54,7 @@ _BATTERY_TRENDS_SCHEMA = "ecoflow-stats.battery-trends/v1"
 _BATTERY_OUTAGES_SCHEMA = "ecoflow-stats.battery-outages/v1"
 _GRID_SERIES_SCHEMA = "ecoflow-stats.grid-series/v1"
 _GRID_DAILY_SCHEMA = "ecoflow-stats.grid-daily/v1"
+_ENERGY_DAILY_SCHEMA = "ecoflow-stats.energy-daily/v1"
 _DEFAULT_RANGE_S = 7 * 24 * 60 * 60
 """The range query defaults to the trailing 7 days when `from`/`to` are
 omitted -- a sensible default for a dashboard call, not a domain rule."""
@@ -60,6 +63,12 @@ _PRESENT, _ABSENT, _UNKNOWN = "present", "absent", "unknown"
 _GRID_BUCKET_TIERS: tuple[tuple[int | None, int], ...] = ((7, 300), (90, 3_600), (None, 86_400))
 """`grid/series`'s chart-resolution tiers (task 20.3): 5 min for a
 range of 7 days or less, 1 h for up to 90 days, 1 day beyond that."""
+
+_ENERGY_GRANULARITY_TIERS: tuple[tuple[int | None, str], ...] = ((90, "daily"), (None, "monthly"))
+"""`energy/daily`'s aggregation-granularity tiers (task 19.1): daily
+rows for a range of 90 days or less, monthly aggregates beyond that --
+the same `_select_bucket` decision `grid/series` already applies at
+its own thresholds and labels (task 20.5's dedup concern)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +88,14 @@ class ApiContext:
     one); treated as "no active decisions yet" rather than failing, the
     same honest-default style as `resolve()`'s own `legacy=()` here."""
     tz: str = "UTC"
+    tariff: float | None = None
+    """The configured flat tariff price per kWh (`Settings.tariff`),
+    `energy/daily`'s cost basis (task 19.1). `None` means no tariff is
+    configured: that route reports cost as `"unavailable"`, never a
+    fabricated `0` (energy requirement "Energy Cost from a Configurable
+    Flat Tariff")."""
+    currency: str = ""
+    """The configured tariff's currency label (`Settings.currency`)."""
 
 
 router = APIRouter()
@@ -101,16 +118,17 @@ def _resolve_range(ctx: ApiContext, start: int | None, end: int | None) -> tuple
     return range_start, range_end
 
 
-def _select_bucket(
-    range_start: int, range_end: int, tiers: Sequence[tuple[int | None, int]]
-) -> int:
+def _select_bucket[BucketT](
+    range_start: int, range_end: int, tiers: Sequence[tuple[int | None, BucketT]]
+) -> BucketT:
     """Pick the coarsest tier whose day-span threshold still covers
-    ``[range_start, range_end)``'s length -- the one reusable rule
-    `grid/series`'s chart resolution applies (task 20.5's dedup
-    concern: a single shared decision, not an independently maintained
-    copy per route). ``tiers`` is ordered ``(max_days, value)``;
-    ``max_days=None`` is the open-ended "beyond every prior threshold"
-    tier and must be last."""
+    ``[range_start, range_end)``'s length -- the one reusable rule both
+    `grid/series` (5min/1h/1day chart resolution) and `energy/daily`
+    (daily-vs-monthly aggregation) apply at their own thresholds and
+    labels (task 20.5's dedup concern: a single shared decision, not an
+    independently maintained copy per route). ``tiers`` is ordered
+    ``(max_days, value)``; ``max_days=None`` is the open-ended "beyond
+    every prior threshold" tier and must be last."""
     span_days = (range_end - range_start) / 86_400
     for max_days, value in tiers:
         if max_days is None or span_days <= max_days:
@@ -592,11 +610,140 @@ def grid_daily_route(
     return JSONResponse(body)
 
 
+def _energy_period(
+    period: str,
+    chg_ac_wh: float,
+    chg_dc_wh: float,
+    chg_solar_wh: float,
+    dsg_ac_wh: float,
+    dsg_dc_wh: float,
+    chg_ac_est_wh: float,
+    flags: list[str],
+    *,
+    tariff: float | None,
+    currency: str,
+) -> dict[str, object]:
+    return {
+        "period": period,
+        "chg_ac_wh": chg_ac_wh,
+        "chg_dc_wh": chg_dc_wh,
+        "chg_solar_wh": chg_solar_wh,
+        "dsg_ac_wh": dsg_ac_wh,
+        "dsg_dc_wh": dsg_dc_wh,
+        "chg_ac_est_wh": chg_ac_est_wh,
+        "cost": "unavailable" if tariff is None else chg_ac_wh / 1000 * tariff,
+        "currency": currency,
+        "flags": flags,
+    }
+
+
+def _build_energy_periods(
+    rows: Sequence[DailyEnergyRollup], granularity: str, *, tariff: float | None, currency: str
+) -> list[dict[str, object]]:
+    """Daily or monthly energy periods from a device's persisted energy
+    rollup rows (energy requirement "Daily Energy by Source and
+    Direction"; task 19.1). Each row's missing Wh fields (a day
+    `derive_rollups` never ran `upsert_energy` for at all) default to
+    `0.0` -- the same "no energy moved" semantics
+    `energy.accounting.DailyEnergy`'s own numeric defaults already use,
+    distinct from `cost`'s own separate `"unavailable"` sentinel."""
+    if granularity == "monthly":
+        grouped: dict[str, dict[str, object]] = {}
+        for row in rows:
+            month = row.day[:7]
+            bucket = grouped.setdefault(
+                month,
+                {
+                    "chg_ac_wh": 0.0,
+                    "chg_dc_wh": 0.0,
+                    "chg_solar_wh": 0.0,
+                    "dsg_ac_wh": 0.0,
+                    "dsg_dc_wh": 0.0,
+                    "chg_ac_est_wh": 0.0,
+                    "flags": set(),
+                },
+            )
+            bucket["chg_ac_wh"] += row.chg_ac_wh or 0.0  # type: ignore[operator]
+            bucket["chg_dc_wh"] += row.chg_dc_wh or 0.0  # type: ignore[operator]
+            bucket["chg_solar_wh"] += row.chg_solar_wh or 0.0  # type: ignore[operator]
+            bucket["dsg_ac_wh"] += row.dsg_ac_wh or 0.0  # type: ignore[operator]
+            bucket["dsg_dc_wh"] += row.dsg_dc_wh or 0.0  # type: ignore[operator]
+            bucket["chg_ac_est_wh"] += row.chg_ac_est_wh  # type: ignore[operator]
+            bucket["flags"] |= decode_energy_flags(row.energy_flags)  # type: ignore[operator]
+        return [
+            _energy_period(
+                month,
+                b["chg_ac_wh"],  # type: ignore[arg-type]
+                b["chg_dc_wh"],  # type: ignore[arg-type]
+                b["chg_solar_wh"],  # type: ignore[arg-type]
+                b["dsg_ac_wh"],  # type: ignore[arg-type]
+                b["dsg_dc_wh"],  # type: ignore[arg-type]
+                b["chg_ac_est_wh"],  # type: ignore[arg-type]
+                sorted(b["flags"]),  # type: ignore[arg-type]
+                tariff=tariff,
+                currency=currency,
+            )
+            for month, b in sorted(grouped.items())
+        ]
+    return [
+        _energy_period(
+            row.day,
+            row.chg_ac_wh or 0.0,
+            row.chg_dc_wh or 0.0,
+            row.chg_solar_wh or 0.0,
+            row.dsg_ac_wh or 0.0,
+            row.dsg_dc_wh or 0.0,
+            row.chg_ac_est_wh,
+            sorted(decode_energy_flags(row.energy_flags)),
+            tariff=tariff,
+            currency=currency,
+        )
+        for row in rows
+    ]
+
+
+@router.get("/api/v1/energy/daily")
+def energy_daily_route(
+    request: Request,
+    device: int | None = None,
+    start: int | None = Query(None, alias="from"),
+    end: int | None = Query(None, alias="to"),
+) -> JSONResponse:
+    """energy requirements "Daily Energy by Source and Direction",
+    "Energy Cost from a Configurable Flat Tariff": daily (or monthly
+    beyond 90 days) kWh by flow, cost per period and total, and each
+    row's estimate flags, read from the persisted energy rollup columns
+    fix01 wired `derive_rollups` to write (task 19.1's API half)."""
+    ctx: ApiContext = request.app.state.api
+    device_id = _resolve_device_id(ctx, device)
+    range_start, range_end = _resolve_range(ctx, start, end)
+    granularity = _select_bucket(range_start, range_end, _ENERGY_GRANULARITY_TIERS)
+    rows = _rollup_store(request).energy_between(
+        device_id, local_day(range_start, ctx.tz), local_day(range_end, ctx.tz)
+    )
+    periods = _build_energy_periods(rows, granularity, tariff=ctx.tariff, currency=ctx.currency)
+    total_chg_ac_wh = sum(period["chg_ac_wh"] for period in periods)  # type: ignore[misc]
+    body = {
+        "schema": _ENERGY_DAILY_SCHEMA,
+        "device_id": device_id,
+        "range": {"start": range_start, "end": range_end},
+        "granularity": granularity,
+        "periods": periods,
+        "total": {
+            "chg_ac_wh": total_chg_ac_wh,
+            "cost": "unavailable" if ctx.tariff is None else total_chg_ac_wh / 1000 * ctx.tariff,
+            "currency": ctx.currency,
+        },
+    }
+    return JSONResponse(body)
+
+
 __all__ = [
     "ApiContext",
     "battery_outages_route",
     "battery_series_route",
     "battery_trends_route",
+    "energy_daily_route",
     "gaps_route",
     "grid_daily_route",
     "grid_series_route",

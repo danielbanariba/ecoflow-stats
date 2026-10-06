@@ -12,6 +12,13 @@
 // entrances, the ring's animated fill, and the four ECharts visuals —
 // every animated branch checks `prefersReducedMotion()` and skips itself
 // entirely when the user asked for less motion (design redesign01).
+//
+// P-02 (orchestrator QA): `.reveal` elements are fully visible by
+// default in `app.css` -- only `html.js .reveal` is hidden pending its
+// entrance animation. This line is the first thing the script does, so
+// a JS-enabled visitor gets that hidden-then-revealed treatment and a
+// no-JS (or JS-failed) visitor never does.
+document.documentElement.classList.add("js");
 
 function prefersReducedMotion() {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;

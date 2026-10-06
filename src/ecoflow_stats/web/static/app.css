@@ -868,6 +868,7 @@ section + section {
   letter-spacing: -0.02em;
   color: var(--text-primary);
   line-height: 1;
+  white-space: nowrap;
 }
 
 .stat-tile__sub {
@@ -895,7 +896,13 @@ section + section {
   gap: var(--space-4);
 }
 
-@media (max-width: 900px) {
+/* P-01 (orchestrator QA): at ~1000px wide, 6 narrow columns forced a
+   value like "13 h 8 min" to wrap mid-word. Dropping to 3 columns
+   earlier (1100px instead of 900px) gives each card enough width
+   before that point; `white-space: nowrap` on the value itself (below)
+   is the second half of the fix, so a value that still does not fit
+   its column clips cleanly rather than wrapping. */
+@media (max-width: 1100px) {
   .stat-grid {
     grid-template-columns: repeat(3, 1fr);
   }
@@ -940,6 +947,7 @@ section + section {
   letter-spacing: -0.02em;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* ---------- Chart cards ---------- */
@@ -1233,13 +1241,23 @@ tbody tr:last-child td {
 }
 
 /* ---------- Motion: scroll reveal ---------- */
-.reveal {
+/* P-02 (orchestrator QA): `.reveal` used to start at `opacity: 0`
+   unconditionally, so a visitor with JavaScript disabled or failing
+   (the only actor that ever adds `.is-visible`) saw permanently
+   invisible content -- `app.js` is the only thing that ever un-hides
+   it. The hidden state is now gated on `.js`, a class `app.js` adds to
+   `<html>` as its very first statement (CSP-safe: no inline script);
+   without JS, `<html>` never gets that class, so `.reveal` content
+   stays at its default, fully visible state. With JS, the same
+   fade-up entrance and the reduced-motion override below still apply,
+   unchanged. */
+.js .reveal {
   opacity: 0;
   transform: translateY(22px);
   transition: opacity var(--dur-slow) var(--ease-apple), transform var(--dur-slow) var(--ease-apple);
 }
 
-.reveal.is-visible {
+.js .reveal.is-visible {
   opacity: 1;
   transform: translateY(0);
 }

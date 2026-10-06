@@ -18,7 +18,7 @@ from ecoflow_stats.devices.adapter import FieldSpec, MappedAdapter, _is_real_num
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from ecoflow_stats.acquisition.ecoflow_client import DeviceInfo
+    from ecoflow_stats.devices.adapter import DeviceInfo
 
 _WATT_BOUNDS = (0.0, 20_000.0)
 _COUNTER_BOUNDS = (0.0, math.inf)

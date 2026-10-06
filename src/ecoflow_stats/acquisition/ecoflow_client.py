@@ -14,12 +14,12 @@ from __future__ import annotations
 import asyncio
 import secrets
 import time
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import httpx
 
 from ecoflow_stats.acquisition.signing import sign
+from ecoflow_stats.devices.adapter import DeviceInfo
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -74,16 +74,6 @@ class CloudApiError(CloudError):
 
 class CloudBadPayload(CloudError):
     """The response body was not JSON, or its ``data`` field had the wrong shape."""
-
-
-@dataclass(frozen=True, slots=True)
-class DeviceInfo:
-    """One device as returned by the account's device list."""
-
-    sn: str
-    name: str | None
-    product_name: str | None
-    online: bool | None
 
 
 class ReadOnlyTransport(httpx.AsyncBaseTransport):

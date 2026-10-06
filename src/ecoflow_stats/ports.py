@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
     from datetime import datetime
 
-    from ecoflow_stats.acquisition.ecoflow_client import DeviceInfo
+    from ecoflow_stats.devices.adapter import DeviceInfo
     from ecoflow_stats.devices.reading import Reading
     from ecoflow_stats.notifications.messages import AlertKey, Message, PendingAlert
     from ecoflow_stats.outages.model import AppRunLike, Decision, Event, Gap

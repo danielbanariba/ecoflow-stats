@@ -15,8 +15,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-    from ecoflow_stats.acquisition.ecoflow_client import DeviceInfo
-    from ecoflow_stats.devices.adapter import DeviceAdapter
+    from ecoflow_stats.devices.adapter import DeviceAdapter, DeviceInfo
 
 
 class AdapterRegistry:

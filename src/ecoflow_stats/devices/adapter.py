@@ -18,7 +18,23 @@ from ecoflow_stats.devices.reading import Reading
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-    from ecoflow_stats.acquisition.ecoflow_client import DeviceInfo
+
+@dataclass(frozen=True, slots=True)
+class DeviceInfo:
+    """One device as returned by the account's device list.
+
+    Lives in the pure `devices` core, not in `acquisition` (the cloud
+    adapter that happens to be the one place today that constructs it):
+    `DeviceAdapter.claims()` below needs this shape to resolve a model,
+    and the hexagonal core must never import an adapter, even for a type
+    (Named defect "Core doing I/O" — `acquisition.ecoflow_client`
+    re-exports this same class for backward compatibility).
+    """
+
+    sn: str
+    name: str | None
+    product_name: str | None
+    online: bool | None
 
 
 def _is_real_number(value: object) -> bool:
@@ -131,4 +147,4 @@ class MappedAdapter:
         return Normalized(reading=Reading(**values), unmapped_keys=unmapped, rejected=rejected)
 
 
-__all__ = ["DeviceAdapter", "FieldSpec", "MappedAdapter", "Normalized", "num"]
+__all__ = ["DeviceAdapter", "DeviceInfo", "FieldSpec", "MappedAdapter", "Normalized", "num"]

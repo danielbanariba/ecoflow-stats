@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="{{ html_lang }}" data-theme="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="htmx-config" content='{"allowEval": false, "includeIndicatorStyles": false}'>
+  <title>{% block title %}{{ t('app.name') }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/vendor/htmx.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body hx-boost="true">
+  <a class="skip-link" href="#main">{{ t('common.skip_to_content') }}</a>
+  <header class="site-header">
+    <p class="site-header__brand">{{ t('app.name') }}</p>
+    <form class="lang-switcher" method="post" action="/preferences">
+      <input type="hidden" name="lang" value="en">
+      <button type="submit" class="lang-switcher__button" {% if lang == 'en' %}aria-current="true"{% endif %}>EN</button>
+    </form>
+    <form class="lang-switcher" method="post" action="/preferences">
+      <input type="hidden" name="lang" value="es">
+      <button type="submit" class="lang-switcher__button" {% if lang == 'es' %}aria-current="true"{% endif %}>ES</button>
+    </form>
+  </header>
+  <nav class="site-nav" aria-label="{{ t('nav.label') }}">
+    <a href="/">{{ t('nav.overview') }}</a>
+  </nav>
+  <main id="main">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{% macro device_selector(devices, t) %}
+<form class="device-selector" method="get" action="/">
+  <label for="device-select">{{ t('device.selector.label') }}</label>
+  <select id="device-select" name="device">
+    {% for opt in devices %}
+    <option value="{{ opt.id }}"{% if opt.selected %} selected{% endif %}>{{ opt.label }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">{{ t('device.selector.submit') }}</button>
+</form>
+{% endmacro %}

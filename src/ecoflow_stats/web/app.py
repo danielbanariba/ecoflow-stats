@@ -14,9 +14,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from ecoflow_stats.acquisition.collector import run_forever
 from ecoflow_stats.jobs import SupervisedTask, SupervisedTaskHandle, run_derive_forever
@@ -26,11 +28,15 @@ from ecoflow_stats.web.routes.api import ApiContext
 from ecoflow_stats.web.routes.api import router as api_router
 from ecoflow_stats.web.routes.health import HealthContext
 from ecoflow_stats.web.routes.health import router as health_router
+from ecoflow_stats.web.routes.pages import PagesContext
+from ecoflow_stats.web.routes.pages import router as pages_router
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
 
     from ecoflow_stats.bootstrap import Application
+
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 def _start_collector(application: Application) -> SupervisedTaskHandle:
@@ -114,6 +120,22 @@ def _build_api_context(application: Application) -> ApiContext:
     )
 
 
+def _build_pages_context(application: Application) -> PagesContext:
+    return PagesContext(
+        now=application.clock.now,
+        stale_threshold_s=application.settings.stale_threshold,
+        poll_interval_s=application.settings.poll_interval,
+        detector_config=DetectorConfig(
+            threshold_v=application.settings.outage_threshold_v,
+            gap_threshold_s=application.settings.gap_threshold,
+        ),
+        sample_store=application.sample_store,
+        outage_store=OutageStore(application.database.writer),
+        device_records=application.device_records,
+        default_lang=application.settings.default_lang,
+    )
+
+
 def create_app(
     application: Application,
     *,
@@ -136,6 +158,7 @@ def create_app(
         app.state.application = application
         app.state.health = _build_health_context(application, handle)
         app.state.api = _build_api_context(application)
+        app.state.pages = _build_pages_context(application)
         try:
             yield
         finally:
@@ -149,6 +172,8 @@ def create_app(
     app = FastAPI(title="ecoflow-stats", lifespan=lifespan)
     app.include_router(health_router)
     app.include_router(api_router)
+    app.include_router(pages_router)
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
     return app
 
 

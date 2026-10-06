@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}{{ t('nav.overview') }} · {{ t('app.name') }}{% endblock %}
+{% block content %}
+<h1>{{ t('nav.overview') }}</h1>
+
+<section class="device-selector-section" aria-label="{{ t('device.selector.label') }}">
+  {{ macros.device_selector(view.devices, t) }}
+</section>
+
+<section
+  id="live-card"
+  class="live-card-section"
+  hx-get="/partials/live?device={{ view.selected_device_id }}"
+  hx-trigger="every 30s"
+  hx-swap="innerHTML"
+>
+  {% include "partials/live.html" %}
+</section>
+{% endblock %}

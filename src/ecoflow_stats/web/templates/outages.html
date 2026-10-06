@@ -118,6 +118,14 @@
 <section class="outages-gap-review-section" aria-label="{{ t('outages.gap_review.heading') }}">
   <h2>{{ t('outages.gap_review.heading') }}</h2>
   <p>{{ t('outages.gap_review.count').format(count=view.gap_review_count) }}</p>
+  <button
+    type="button"
+    class="gap-review-expand"
+    hx-get="/outages/gaps?device={{ view.selected_device_id }}&from={{ view.range_start }}&to={{ view.range_end }}"
+    hx-target="#gap-review-list"
+    hx-swap="innerHTML"
+  >{{ t('outages.gap_review.expand_label') }}</button>
+  <div id="gap-review-list" class="gap-review-list" aria-live="polite"></div>
 </section>
 
 <section class="outages-mains-strip-section" aria-label="{{ t('outages.mains_strip.heading') }}">

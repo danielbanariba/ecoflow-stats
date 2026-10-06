@@ -26,6 +26,7 @@ from ecoflow_stats.jobs import SupervisedTask, SupervisedTaskHandle, run_derive_
 from ecoflow_stats.outages.model import DetectorConfig
 from ecoflow_stats.storage.decisions import DecisionStore
 from ecoflow_stats.storage.outages import OutageStore
+from ecoflow_stats.web.routes.actions import router as actions_router
 from ecoflow_stats.web.routes.api import ApiContext
 from ecoflow_stats.web.routes.api import router as api_router
 from ecoflow_stats.web.routes.health import HealthContext
@@ -206,6 +207,7 @@ def create_app(
     app.include_router(health_router)
     app.include_router(api_router)
     app.include_router(pages_router)
+    app.include_router(actions_router)
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
     return app
 

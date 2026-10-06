@@ -123,5 +123,7 @@
   "error.404.message": "No hay nada en esta dirección. Puede que se haya movido, o que el enlace esté desactualizado.",
   "error.500.title": "Ocurrió un error",
   "error.500.message": "Ocurrió un error inesperado al procesar esta solicitud. Intente de nuevo en un momento.",
-  "error.back_home": "Volver al resumen"
+  "error.back_home": "Volver al resumen",
+  "error.htmx.response": "Ocurrió un error al enviar eso. Intente de nuevo en un momento.",
+  "error.htmx.send": "No se pudo conectar con el servidor. Verifique su conexión e intente de nuevo."
 }

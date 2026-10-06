@@ -30,6 +30,23 @@
     <div class="ambient__spot ambient__spot--3"></div>
   </div>
   <a class="skip-link" href="#main">{{ t('common.skip_to_content') }}</a>
+  {#
+    UI-15 (qa-report-ui-01.md): "a failed HTMX mutating request shows no
+    feedback". Server-rendered once per page (not created by JS, so it
+    always exists for `aria-live` to pick up) and hidden by default;
+    `app.js` only ever toggles its `hidden` property and swaps
+    `textContent` from the already-translated `data-*-message` values
+    below -- never an inline script/style (CSP-safe).
+  #}
+  <div
+    id="htmx-error-banner"
+    class="htmx-error-banner"
+    role="alert"
+    aria-live="assertive"
+    hidden
+    data-response-message="{{ t('error.htmx.response') }}"
+    data-send-message="{{ t('error.htmx.send') }}"
+  ></div>
   <header class="glass-nav">
     <div class="glass-nav__bar">
       <a class="glass-nav__brand" href="/">

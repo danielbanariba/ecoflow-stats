@@ -123,5 +123,7 @@
   "error.404.message": "There's nothing at this address. It may have been moved, or the link may be out of date.",
   "error.500.title": "Something went wrong",
   "error.500.message": "An unexpected error occurred while handling this request. Try again in a moment.",
-  "error.back_home": "Back to the overview"
+  "error.back_home": "Back to the overview",
+  "error.htmx.response": "Something went wrong submitting that. Try again in a moment.",
+  "error.htmx.send": "Could not reach the server. Check your connection and try again."
 }

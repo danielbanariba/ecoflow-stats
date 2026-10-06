@@ -116,9 +116,46 @@ function initRings() {
 // htmx swaps in (the gap-review list, a confirmed/rejected row) so newly
 // inserted markup animates in the same way the initial page load does. ----
 document.body.addEventListener("htmx:afterSettle", (event) => {
+  hideHtmxErrorBanner();
   initReveal(event.target instanceof Element ? event.target : document);
   initRings();
   initCharts();
+});
+
+// ---- HTMX failure feedback (UI-15, qa-report-ui-01.md: "a failed HTMX
+// mutating request shows no feedback"): `#htmx-error-banner` is already
+// server-rendered with `role="alert"`/`aria-live="assertive"` and its
+// own translated text in `base.html`, so this only ever toggles the
+// `hidden` property and swaps `textContent` -- never an inline
+// script/style (CSP-safe). A later successful swap (the handler above)
+// clears a stale banner; the timeout below is the fallback for when no
+// further request follows. ----
+function showHtmxErrorBanner(message) {
+  const banner = document.getElementById("htmx-error-banner");
+  if (!banner || !message) return;
+  banner.textContent = message;
+  banner.hidden = false;
+  window.clearTimeout(banner._hideTimer);
+  banner._hideTimer = window.setTimeout(() => {
+    banner.hidden = true;
+  }, 6000);
+}
+
+function hideHtmxErrorBanner() {
+  const banner = document.getElementById("htmx-error-banner");
+  if (!banner) return;
+  window.clearTimeout(banner._hideTimer);
+  banner.hidden = true;
+}
+
+document.body.addEventListener("htmx:responseError", () => {
+  const banner = document.getElementById("htmx-error-banner");
+  showHtmxErrorBanner(banner && banner.dataset.responseMessage);
+});
+
+document.body.addEventListener("htmx:sendError", () => {
+  const banner = document.getElementById("htmx-error-banner");
+  showHtmxErrorBanner(banner && banner.dataset.sendMessage);
 });
 
 // ---- ECharts restyle: dark-theme colors, glass tooltip, smooth lines —

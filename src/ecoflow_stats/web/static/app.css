@@ -1213,3 +1213,21 @@ tbody tr:last-child td {
     transform: none;
   }
 }
+
+/* ---------- HTMX error banner (UI-15) ---------- */
+.htmx-error-banner {
+  position: fixed;
+  top: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  max-width: calc(100vw - var(--space-6));
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-pill);
+  background: var(--outage-strong);
+  color: #fff;
+  font-size: var(--text-caption);
+  font-weight: 600;
+  text-align: center;
+  box-shadow: var(--shadow-card);
+}

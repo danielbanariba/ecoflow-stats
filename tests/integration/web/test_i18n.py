@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -119,6 +120,50 @@ def test_an_unsupported_preference_falls_back_to_english(
         assert response.status_code == 200
         assert 'lang="en"' in response.text
         assert "Overview" in response.text
+    finally:
+        application.database.close()
+
+
+def test_the_htmx_error_banner_is_rendered_hidden_with_translated_accessible_markup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UI-15 (qa-report-ui-01.md): "a failed HTMX mutating request shows
+    no feedback". `app.js` has no server call of its own to fetch a
+    translated string from, so this banner's text must already be
+    baked into the server-rendered page in the negotiated language,
+    exactly like every other translated string on the page -- before
+    this fix, no page rendered any element at all for `app.js` to show
+    feedback in, matching the finding exactly.
+
+    Pass-2 target: removing `#htmx-error-banner`'s `role`, `aria-live`,
+    or `hidden` attribute from `base.html`, or its translated
+    `data-response-message`/`data-send-message` values, turns this
+    red."""
+    client, application = _app(monkeypatch, tmp_path)
+    try:
+        with client:
+            en_response = client.get("/")
+            es_response = client.get("/", headers={"accept-language": "es-HN,es;q=0.9"})
+
+        cases = (
+            (en_response, "Something went wrong submitting that.", "Could not reach the server."),
+            (
+                es_response,
+                "Ocurrió un error al enviar eso.",
+                "No se pudo conectar con el servidor.",
+            ),
+        )
+        for response, expected_response_msg, expected_send_msg in cases:
+            assert response.status_code == 200
+            html = response.text
+            match = re.search(r'<div[^>]*id="htmx-error-banner"[^>]*>', html)
+            assert match is not None, "no #htmx-error-banner element rendered"
+            tag = match.group(0)
+            assert 'role="alert"' in tag
+            assert 'aria-live="assertive"' in tag
+            assert "hidden" in tag
+            assert expected_response_msg in tag
+            assert expected_send_msg in tag
     finally:
         application.database.close()
 

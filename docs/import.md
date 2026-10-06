@@ -34,7 +34,7 @@ ecoflow-stats import \
 | Flag | Required | Meaning |
 |---|---|---|
 | `--serial` | yes | The device serial this history belongs to. Must be one of the serials listed in `ECOFLOW_DEVICES`. |
-| `--source-tz` | yes | The IANA timezone `outages.log`'s timestamps were written in (e.g. `America/Tegucigalpa`). The log stores naive local timestamps with no timezone of its own — this flag is what makes them interpretable. |
+| `--source-tz` | yes | The IANA timezone `outages.log`'s timestamps were written in (e.g. `America/Chicago`). The log stores naive local timestamps with no timezone of its own — this flag is what makes them interpretable. |
 | `--samples` | no* | Path to `samples.db`. |
 | `--outage-log` | no* | Path to `outages.log`. |
 | `--dry-run` | no | Runs the full import against a throwaway database and prints the report, without writing anything to the real application database. |
@@ -54,7 +54,7 @@ Running locally (`uv run ecoflow-stats import` or the installed
 ```sh
 ecoflow-stats import \
   --serial R331ZEB4SF7A0001 \
-  --source-tz America/Tegucigalpa \
+  --source-tz America/Chicago \
   --samples ~/.local/share/ecoflow/samples.db \
   --outage-log ~/.local/share/ecoflow/outages.log
 ```
@@ -68,7 +68,7 @@ docker compose run --rm \
   -v ~/.local/share/ecoflow:/import:ro \
   ecoflow-stats import \
   --serial R331ZEB4SF7A0001 \
-  --source-tz America/Tegucigalpa \
+  --source-tz America/Chicago \
   --samples /import/samples.db \
   --outage-log /import/outages.log
 ```

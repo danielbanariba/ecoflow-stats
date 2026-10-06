@@ -68,15 +68,26 @@ def configure_logging(settings: Settings) -> None:
     Safe to call more than once: any previously installed redaction filter
     is replaced, so the root logger always redacts the settings from the
     most recent call rather than freezing on the first one.
+
+    The filter is installed on the root logger's *handlers*, not only the
+    logger object itself: a record emitted through any other logger in
+    this package (every real call site uses its own
+    ``logging.getLogger(__name__)``, never the root logger directly)
+    propagates to the root logger's handlers without ever consulting the
+    root *logger*'s own filter list — only a handler's filters run during
+    that propagation (see ``tests/contract/test_no_secrets_exposed.py`` for
+    the end-to-end regression this guards).
     """
     logging.basicConfig(
         level=settings.log_level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     root = logging.getLogger()
-    for stale in [f for f in root.filters if isinstance(f, RedactionFilter)]:
-        root.removeFilter(stale)
-    root.addFilter(_build_filter(settings))
+    redaction_filter = _build_filter(settings)
+    for target in (root, *root.handlers):
+        for stale in [f for f in target.filters if isinstance(f, RedactionFilter)]:
+            target.removeFilter(stale)
+        target.addFilter(redaction_filter)
     for name in _NOISY_HTTP_LOGGERS:
         logging.getLogger(name).setLevel(logging.WARNING)
 

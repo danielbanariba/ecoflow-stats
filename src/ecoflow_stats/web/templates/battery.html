@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}{{ t('battery.page.title') }} · {{ t('app.name') }}{% endblock %}
+{% block content %}
+<h1>{{ t('battery.page.title') }}</h1>
+
+<section class="device-selector-section" aria-label="{{ t('device.selector.label') }}">
+  {{ macros.device_selector(view.devices, t, action='/battery') }}
+</section>
+
+<section class="battery-chart-section" aria-label="{{ t('battery.chart.soc.heading') }}">
+  <h2>{{ t('battery.chart.soc.heading') }}</h2>
+  {% call macros.chart_with_fallback('battery-soc-chart', 'soc-line', t('battery.chart.soc.aria_label'), t('chart.fallback_label'), src=view.series_src) %}
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">{{ t('battery.series.table.start') }}</th>
+          <th scope="col">{{ t('battery.series.table.soc') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for point in view.charge_series %}
+        <tr>
+          <td>{{ format_local_dt(point.ts, tz) }}</td>
+          <td>{% if point.soc is not none %}{{ point.soc }}%{% else %}{{ t('common.unavailable') }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endcall %}
+</section>
+
+<section class="battery-dod-section" aria-label="{{ t('battery.dod.heading') }}">
+  <h2>{{ t('battery.dod.heading') }}</h2>
+  {% if view.dod_rows %}
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">{{ t('battery.dod.table.start') }}</th>
+        <th scope="col">{{ t('battery.dod.table.end') }}</th>
+        <th scope="col">{{ t('battery.dod.table.value') }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in view.dod_rows %}
+      <tr>
+        <td>{{ format_local_dt(row.start_ts, tz) }}</td>
+        <td>{% if row.end_ts is not none %}{{ format_local_dt(row.end_ts, tz) }}{% else %}{{ t('outages.table.ongoing') }}{% endif %}</td>
+        <td>{% if row.depth_of_discharge is not none %}{{ t('battery.dod.value').format(points=row.depth_of_discharge) }}{% else %}{{ t('common.unavailable') }}{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>{{ t('battery.dod.empty') }}</p>
+  {% endif %}
+</section>
+
+<section class="battery-trend-section" aria-label="{{ t('battery.trend.heading') }}">
+  <h2>{{ t('battery.trend.heading') }}</h2>
+  {% call macros.chart_with_fallback('battery-trend-chart', 'battery-trend', t('battery.trend.aria_label'), t('chart.fallback_label'), src=view.trends_src) %}
+    {% if view.trend_rows %}
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">{{ t('battery.trend.table.day') }}</th>
+          <th scope="col">{{ t('battery.trend.table.cycles') }}</th>
+          <th scope="col">{{ t('battery.trend.table.soh') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in view.trend_rows %}
+        <tr>
+          <td>{{ row.day }}</td>
+          <td>{% if row.cycles_last is not none %}{{ row.cycles_last }}{% else %}{{ t('common.unavailable') }}{% endif %}</td>
+          <td>{% if row.soh_last is not none %}{{ row.soh_last }}%{% else %}{{ t('common.unavailable') }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p>{{ t('battery.trend.empty') }}</p>
+    {% endif %}
+  {% endcall %}
+</section>
+
+<section class="battery-autonomy-section" aria-label="{{ t('battery.autonomy.heading') }}">
+  <h2>{{ t('battery.autonomy.heading') }}</h2>
+  {% if view.autonomy_rows %}
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">{{ t('battery.autonomy.table.start') }}</th>
+        <th scope="col">{{ t('battery.autonomy.table.end') }}</th>
+        <th scope="col">{{ t('battery.autonomy.table.observed') }}</th>
+        <th scope="col">{{ t('battery.autonomy.table.device_estimate') }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in view.autonomy_rows %}
+      <tr>
+        <td>{{ format_local_dt(row.start_ts, tz) }}</td>
+        <td>{% if row.end_ts is not none %}{{ format_local_dt(row.end_ts, tz) }}{% else %}{{ t('outages.table.ongoing') }}{% endif %}</td>
+        {% if row.observed_h is none %}
+        <td colspan="2">{{ t('battery.autonomy.not_enough_data') }}</td>
+        {% else %}
+        <td>{{ t('battery.autonomy.hours_value').format(hours=row.observed_h) }}</td>
+        <td>{% if row.device_estimate_h is not none %}{{ t('battery.autonomy.hours_value').format(hours=row.device_estimate_h) }}{% else %}{{ t('common.unavailable') }}{% endif %}</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>{{ t('battery.autonomy.empty') }}</p>
+  {% endif %}
+</section>
+
+<script src="/static/vendor/echarts.min.js" defer></script>
+{% endblock %}

@@ -12,18 +12,26 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
+from ecoflow_stats.battery.service import observed_autonomy
+from ecoflow_stats.battery.stats import (
+    DailyBatteryTrend,
+    battery_trend,
+    charge_history,
+    depth_of_discharge,
+)
 from ecoflow_stats.live_status.service import get_status
 from ecoflow_stats.outages.aggregates import compute_aggregates
 from ecoflow_stats.outages.resolve import resolve, unresolved_gaps
+from ecoflow_stats.storage.rollups import RollupStore
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
-    from datetime import datetime
 
     from ecoflow_stats.outages.aggregates import OutageAggregates
     from ecoflow_stats.outages.model import DetectorConfig, Gap
@@ -36,6 +44,9 @@ _OUTAGES_SCHEMA = "ecoflow-stats.outages/v1"
 _HEATMAP_SCHEMA = "ecoflow-stats.outages-heatmap/v1"
 _GAPS_SCHEMA = "ecoflow-stats.gaps/v1"
 _MAINS_STRIP_SCHEMA = "ecoflow-stats.mains-strip/v1"
+_BATTERY_SERIES_SCHEMA = "ecoflow-stats.battery-series/v1"
+_BATTERY_TRENDS_SCHEMA = "ecoflow-stats.battery-trends/v1"
+_BATTERY_OUTAGES_SCHEMA = "ecoflow-stats.battery-outages/v1"
 _DEFAULT_RANGE_S = 7 * 24 * 60 * 60
 """The range query defaults to the trailing 7 days when `from`/`to` are
 omitted -- a sensible default for a dashboard call, not a domain rule."""
@@ -79,6 +90,29 @@ def _resolve_range(ctx: ApiContext, start: int | None, end: int | None) -> tuple
     range_end = end if end is not None else int(ctx.now().timestamp())
     range_start = start if start is not None else range_end - _DEFAULT_RANGE_S
     return range_start, range_end
+
+
+def _utc_day_str(ts: int) -> str:
+    """UTC calendar day for ``ts`` -- the same placeholder day-
+    bucketing `rollups.service._utc_day` uses (Phase 18 will replace
+    both with a timezone-aware `local_day`; duplicated here as a
+    one-line conversion rather than importing that module's private
+    helper)."""
+    return datetime.fromtimestamp(ts, tz=UTC).date().isoformat()
+
+
+def _rollup_store(request: Request) -> RollupStore:
+    """`RollupStore` built from the real `Application`'s own writer
+    connection, read cross-context from `request.app.state.application`
+    -- the same `bootstrap.build`-level object `web.app.create_app`
+    already stashes there -- rather than adding a new `ApiContext`
+    field: `web/app.py`'s `_build_api_context` is outside this slice's
+    declared edit surface, so this avoids touching it, the same
+    cross-context-read choice `web.routes.pages` already uses for
+    `request.app.state.security`/`request.app.state.api`
+    (apply-progress-batch14)."""
+    application = request.app.state.application
+    return RollupStore(application.database.writer)
 
 
 def _reconcile(ctx: ApiContext, device_id: int, range_start: int, range_end: int) -> EffectiveView:
@@ -334,8 +368,125 @@ def mains_strip_route(
     return JSONResponse(body)
 
 
+@router.get("/api/v1/battery/series")
+def battery_series_route(
+    request: Request,
+    device: int | None = None,
+    start: int | None = Query(None, alias="from"),
+    end: int | None = Query(None, alias="to"),
+) -> JSONResponse:
+    """battery requirement "Charge History": the charge line's data
+    source."""
+    ctx: ApiContext = request.app.state.api
+    device_id = _resolve_device_id(ctx, device)
+    range_start, range_end = _resolve_range(ctx, start, end)
+    samples = [
+        (row.ts, row.reading) for row in ctx.sample_store.between(device_id, range_start, range_end)
+    ]
+    points = charge_history(samples)
+    body = {
+        "schema": _BATTERY_SERIES_SCHEMA,
+        "device_id": device_id,
+        "range": {"start": range_start, "end": range_end},
+        "points": [{"ts": point.ts, "soc": point.soc} for point in points],
+    }
+    return JSONResponse(body)
+
+
+@router.get("/api/v1/battery/trends")
+def battery_trends_route(
+    request: Request,
+    device: int | None = None,
+    start: int | None = Query(None, alias="from"),
+    end: int | None = Query(None, alias="to"),
+) -> JSONResponse:
+    """battery requirement "Cycle Count and State-of-Health Trends"."""
+    ctx: ApiContext = request.app.state.api
+    device_id = _resolve_device_id(ctx, device)
+    range_start, range_end = _resolve_range(ctx, start, end)
+    rollup_rows = _rollup_store(request).between(
+        device_id, _utc_day_str(range_start), _utc_day_str(range_end)
+    )
+    trend_days = [
+        DailyBatteryTrend(
+            day=row.day,
+            cycles_last=row.cycles_last,
+            soh_last=row.soh_last,
+            soc_min=row.soc_min,
+            soc_max=row.soc_max,
+            batt_temp_max=row.batt_temp_max,
+        )
+        for row in rollup_rows
+    ]
+    trend = battery_trend(trend_days)
+    body = {
+        "schema": _BATTERY_TRENDS_SCHEMA,
+        "device_id": device_id,
+        "range": {"start": range_start, "end": range_end},
+        "days": [
+            {"day": point.day, "cycles_last": point.cycles_last, "soh_last": point.soh_last}
+            for point in trend
+        ],
+    }
+    return JSONResponse(body)
+
+
+@router.get("/api/v1/battery/outages")
+def battery_outages_route(
+    request: Request,
+    device: int | None = None,
+    start: int | None = Query(None, alias="from"),
+    end: int | None = Query(None, alias="to"),
+) -> JSONResponse:
+    """battery requirements "Depth of Discharge Per Outage" and
+    "Observed Autonomy Compared With Device Estimate" -- per-outage
+    depth of discharge and observed autonomy, NULL-safe on both
+    amendments 6 and 7. Only confirmed outages (`kind == "outage"`)
+    are considered: a brief event, a user-confirmed gap, or an
+    imported legacy entry carries no `soc_min`/`dsg_remain_min_start`
+    telemetry at all, so both functions would always report
+    "unavailable"/"not enough data" for them anyway."""
+    ctx: ApiContext = request.app.state.api
+    device_id = _resolve_device_id(ctx, device)
+    range_start, range_end = _resolve_range(ctx, start, end)
+    events = [
+        event
+        for event in ctx.outage_store.events(device_id, range_start, range_end)
+        if event.kind == "outage"
+    ]
+    rows = []
+    for event in events:
+        dod = depth_of_discharge(event)
+        autonomy = observed_autonomy(event)
+        rows.append(
+            {
+                "start_ts": event.start_ts,
+                "end_ts": event.end_ts,
+                "depth_of_discharge": dod,
+                "observed_autonomy": (
+                    "not enough data"
+                    if autonomy == "not enough data"
+                    else {
+                        "observed_h": autonomy.observed_h,
+                        "device_estimate_h": autonomy.device_estimate_h,
+                    }
+                ),
+            }
+        )
+    body = {
+        "schema": _BATTERY_OUTAGES_SCHEMA,
+        "device_id": device_id,
+        "range": {"start": range_start, "end": range_end},
+        "outages": rows,
+    }
+    return JSONResponse(body)
+
+
 __all__ = [
     "ApiContext",
+    "battery_outages_route",
+    "battery_series_route",
+    "battery_trends_route",
     "gaps_route",
     "mains_strip_route",
     "outages_heatmap_route",

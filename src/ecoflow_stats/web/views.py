@@ -13,12 +13,17 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
+from ecoflow_stats.battery.service import observed_autonomy
+from ecoflow_stats.battery.stats import battery_trend, charge_history, depth_of_discharge
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from ecoflow_stats.battery.stats import DailyBatteryTrend
+    from ecoflow_stats.devices.reading import Reading
     from ecoflow_stats.live_status.status import DeviceStatus
     from ecoflow_stats.outages.aggregates import OutageAggregates
-    from ecoflow_stats.outages.model import Gap
+    from ecoflow_stats.outages.model import Event, Gap
     from ecoflow_stats.outages.resolve import EffectiveOutage
     from ecoflow_stats.storage.devices import DeviceRecord
 
@@ -326,7 +331,151 @@ def build_outages_view_model(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class BatteryChargePoint:
+    """One point of the battery page's charge line (battery requirement
+    "Charge History")."""
+
+    ts: int
+    soc: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class BatteryDodRow:
+    """One outage's row in the depth-of-discharge table (battery
+    requirement "Depth of Discharge Per Outage")."""
+
+    start_ts: int
+    end_ts: int | None
+    depth_of_discharge: int | None
+    """`None` means "unavailable" (amendment item 6) -- the template
+    renders this as the common unavailable label, never a fabricated
+    `0`."""
+
+
+@dataclass(frozen=True, slots=True)
+class BatteryAutonomyRow:
+    """One outage's row in the observed-autonomy table (battery
+    requirement "Observed Autonomy Compared With Device Estimate")."""
+
+    start_ts: int
+    end_ts: int | None
+    observed_h: float | None
+    """`None` means the outage did not qualify at all -- too short, too
+    shallow, still ongoing, or missing a boundary charge -- rendered as
+    "not enough data", never a fabricated figure."""
+    device_estimate_h: float | None
+    """`None` only when `observed_h` is not `None` but the device
+    itself reported no `dsg_remain_min_start` estimate at the outage's
+    start (amendment item 7, "unavailable") -- a distinct, narrower
+    case than `observed_h is None`, never conflated with it."""
+
+
+@dataclass(frozen=True, slots=True)
+class BatteryTrendRow:
+    """One rollup day's row in the cycle/state-of-health trend table."""
+
+    day: str
+    cycles_last: int | None
+    soh_last: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class BatteryViewModel:
+    """Everything `battery.html` renders."""
+
+    devices: tuple[DeviceOption, ...]
+    selected_device_id: int
+    range_start: int
+    range_end: int
+    charge_series: tuple[BatteryChargePoint, ...]
+    dod_rows: tuple[BatteryDodRow, ...]
+    autonomy_rows: tuple[BatteryAutonomyRow, ...]
+    trend_rows: tuple[BatteryTrendRow, ...]
+    series_src: str
+    trends_src: str
+
+
+def build_battery_dod_row(event: Event) -> BatteryDodRow:
+    """One outage's depth-of-discharge row, reusing
+    `battery.stats.depth_of_discharge` directly rather than re-deriving
+    its NULL-safety guard here."""
+    dod = depth_of_discharge(event)
+    return BatteryDodRow(
+        start_ts=event.start_ts,
+        end_ts=event.end_ts,
+        depth_of_discharge=None if dod == "unavailable" else dod,
+    )
+
+
+def build_battery_autonomy_row(event: Event) -> BatteryAutonomyRow:
+    """One outage's observed-autonomy row, reusing
+    `battery.service.observed_autonomy` directly -- the view layer
+    only ever reshapes its result for the template, never re-derives
+    the qualification or NULL-safety guards themselves."""
+    result = observed_autonomy(event)
+    if result == "not enough data":
+        return BatteryAutonomyRow(
+            start_ts=event.start_ts, end_ts=event.end_ts, observed_h=None, device_estimate_h=None
+        )
+    device_estimate_h = (
+        None if result.device_estimate_h == "unavailable" else result.device_estimate_h
+    )
+    return BatteryAutonomyRow(
+        start_ts=event.start_ts,
+        end_ts=event.end_ts,
+        observed_h=result.observed_h,
+        device_estimate_h=device_estimate_h,
+    )
+
+
+def build_battery_view_model(
+    *,
+    device_records: tuple[DeviceRecord, ...],
+    selected_device_id: int,
+    range_start: int,
+    range_end: int,
+    samples: Sequence[tuple[int, Reading]],
+    outage_events: Sequence[Event],
+    trend_days: Sequence[DailyBatteryTrend],
+    series_src: str,
+    trends_src: str,
+) -> BatteryViewModel:
+    """Build the battery page's view model from already-fetched data.
+
+    `outage_events` ordered most-recent-first (matching
+    `build_outage_event_rows`'s own convention) so both the
+    depth-of-discharge and autonomy tables show the latest outage
+    first without scrolling.
+    """
+    ordered_events = sorted(outage_events, key=lambda event: event.start_ts, reverse=True)
+    charge_points = charge_history(samples)
+    trend = battery_trend(trend_days)
+    return BatteryViewModel(
+        devices=build_device_options(device_records, selected_device_id=selected_device_id),
+        selected_device_id=selected_device_id,
+        range_start=range_start,
+        range_end=range_end,
+        charge_series=tuple(
+            BatteryChargePoint(ts=point.ts, soc=point.soc) for point in charge_points
+        ),
+        dod_rows=tuple(build_battery_dod_row(event) for event in ordered_events),
+        autonomy_rows=tuple(build_battery_autonomy_row(event) for event in ordered_events),
+        trend_rows=tuple(
+            BatteryTrendRow(day=point.day, cycles_last=point.cycles_last, soh_last=point.soh_last)
+            for point in trend
+        ),
+        series_src=series_src,
+        trends_src=trends_src,
+    )
+
+
 __all__ = [
+    "BatteryAutonomyRow",
+    "BatteryChargePoint",
+    "BatteryDodRow",
+    "BatteryTrendRow",
+    "BatteryViewModel",
     "DeviceOption",
     "HeatmapViewModel",
     "MainsStripSegment",
@@ -334,6 +483,9 @@ __all__ = [
     "OutagesSummary",
     "OutagesViewModel",
     "OverviewViewModel",
+    "build_battery_autonomy_row",
+    "build_battery_dod_row",
+    "build_battery_view_model",
     "build_device_options",
     "build_mains_strip_segments",
     "build_outage_event_rows",

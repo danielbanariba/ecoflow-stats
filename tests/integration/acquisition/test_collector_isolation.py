@@ -16,14 +16,19 @@ from ecoflow_stats.acquisition.collector import CollectorDevice, collect_one, ru
 from ecoflow_stats.acquisition.ecoflow_client import CloudHttpError, CloudNetworkError, CloudTimeout
 from ecoflow_stats.devices.models import REGISTERED
 from ecoflow_stats.devices.registry import AdapterRegistry
+from ecoflow_stats.notifications.service import NotificationService
+from ecoflow_stats.outages.detector import LiveOutageState, OutageMachine
+from ecoflow_stats.outages.model import DetectorConfig
 from ecoflow_stats.storage.database import Database
 from ecoflow_stats.storage.derivations import DerivationStore
 from ecoflow_stats.storage.devices import DeviceStore
 from ecoflow_stats.storage.failures import FailureLog
+from ecoflow_stats.storage.notifications import NotificationLedger
 from ecoflow_stats.storage.samples import SampleStore
-from tests.fakes import FakeClock, FakeDeviceCloud
+from tests.fakes import FakeClock, FakeDeviceCloud, RecordingNotifier
 
 _VALID_PAYLOAD = {"bmsMaster.soc": 77, "inv.acInVol": 115_000, "productName": "DELTA Pro"}
+_BELOW_THRESHOLD_PAYLOAD = {"bmsMaster.soc": 77, "inv.acInVol": 0, "productName": "DELTA Pro"}
 
 
 def _env(tmp_path: Path) -> tuple[Database, SampleStore, FailureLog, int]:
@@ -240,5 +245,121 @@ async def test_one_devices_failure_does_not_block_another_devices_collection(
         assert samples.latest(a.id) is None
         assert samples.latest(b.id) is not None
         assert len(failures.between(a.id, 0, 10**12)) == 1
+    finally:
+        db.close()
+
+
+class _RaisingNotificationService:
+    """A `NotificationService`-shaped double whose `handle_transition`
+    always raises -- unlike the real service (which already isolates a
+    `NotifyError` internally), this proves `collect_one` itself is the
+    final backstop against ANY unexpected notification-path failure."""
+
+    async def handle_transition(self, device_id: int, transition: object) -> None:
+        raise RuntimeError("boom")
+
+
+@pytest.mark.anyio
+async def test_a_single_below_threshold_reading_triggers_a_live_start_notification(
+    tmp_path: Path,
+) -> None:
+    """Notifications requirement "Alert on the First Below-Threshold
+    Reading": a single below-floor tick must notify immediately, before
+    any 2-reading debounce confirms an official outage."""
+    db, samples, failures, device_id = _env(tmp_path)
+    try:
+        ledger = NotificationLedger(db.writer)
+        notifier = RecordingNotifier()
+        clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
+        service = NotificationService(ledger=ledger, notifier=notifier, clock=clock, lang="en")
+        live_state = LiveOutageState(machine=OutageMachine())
+        cloud = FakeDeviceCloud(quota_results={"BA31ZEB1SF7F0001": _BELOW_THRESHOLD_PAYLOAD})
+        device = CollectorDevice(device_id=device_id, sn="BA31ZEB1SF7F0001")
+
+        await collect_one(
+            device,
+            cloud=cloud,
+            registry=AdapterRegistry(REGISTERED),
+            samples=samples,
+            failures=failures,
+            clock=clock,
+            live_state=live_state,
+            notification_service=service,
+            detector_config=DetectorConfig(),
+        )
+
+        assert len(notifier.sent) == 1
+        assert notifier.sent[0].title == "Power is out"
+    finally:
+        db.close()
+
+
+@pytest.mark.anyio
+async def test_the_live_state_persists_across_ticks_so_a_second_reading_does_not_resend(
+    tmp_path: Path,
+) -> None:
+    """Pass-1: if `collect_one` built a fresh `LiveOutageState` on every
+    call instead of mutating the one it is given, every single tick
+    would look like a brand-new outage start, re-sending the start
+    alert on every below-threshold reading instead of exactly once."""
+    db, samples, failures, device_id = _env(tmp_path)
+    try:
+        ledger = NotificationLedger(db.writer)
+        notifier = RecordingNotifier()
+        clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
+        service = NotificationService(ledger=ledger, notifier=notifier, clock=clock, lang="en")
+        live_state = LiveOutageState(machine=OutageMachine())
+        cloud = FakeDeviceCloud(quota_results={"BA31ZEB1SF7F0001": _BELOW_THRESHOLD_PAYLOAD})
+        device = CollectorDevice(device_id=device_id, sn="BA31ZEB1SF7F0001")
+
+        for _ in range(2):
+            await collect_one(
+                device,
+                cloud=cloud,
+                registry=AdapterRegistry(REGISTERED),
+                samples=samples,
+                failures=failures,
+                clock=clock,
+                live_state=live_state,
+                notification_service=service,
+                detector_config=DetectorConfig(),
+            )
+
+        # The second tick only confirms the outage; it doesn't start a new one.
+        assert len(notifier.sent) == 1
+        assert live_state.machine.mode == "absent"
+    finally:
+        db.close()
+
+
+@pytest.mark.anyio
+async def test_an_unexpected_notification_failure_does_not_stop_the_sample_from_being_stored(
+    tmp_path: Path,
+) -> None:
+    """Notifications requirement "Notification Failures Are Isolated
+    From Collection": collection must succeed even when the entire
+    notification path blows up unexpectedly, not just on a handled
+    `NotifyError`."""
+    db, samples, failures, device_id = _env(tmp_path)
+    try:
+        live_state = LiveOutageState(machine=OutageMachine())
+        cloud = FakeDeviceCloud(quota_results={"BA31ZEB1SF7F0001": _BELOW_THRESHOLD_PAYLOAD})
+        device = CollectorDevice(device_id=device_id, sn="BA31ZEB1SF7F0001")
+        clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
+
+        stored = await collect_one(
+            device,
+            cloud=cloud,
+            registry=AdapterRegistry(REGISTERED),
+            samples=samples,
+            failures=failures,
+            clock=clock,
+            live_state=live_state,
+            notification_service=_RaisingNotificationService(),
+            detector_config=DetectorConfig(),
+        )
+
+        assert stored is True
+        assert samples.latest(device_id) is not None
     finally:
         db.close()

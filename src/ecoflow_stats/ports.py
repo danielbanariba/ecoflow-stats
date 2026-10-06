@@ -178,6 +178,12 @@ class DecisionStore(Protocol):
         """Return every not-yet-superseded decision for a device."""
         ...
 
+    def undo(self, decision_id: int) -> None:
+        """Mark a decision superseded by itself: undone, never replaced
+        by a new verdict and never deleted -- the audit trail stays
+        intact (web-ui `POST /decisions/{id}/undo`)."""
+        ...
+
 
 class NotificationLedger(Protocol):
     """At-least-once delivery ledger, keyed by device, event start and kind."""

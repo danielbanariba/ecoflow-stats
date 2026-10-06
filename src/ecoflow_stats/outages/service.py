@@ -18,19 +18,30 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from ecoflow_stats.outages import model
 from ecoflow_stats.outages.detector import detect
-from ecoflow_stats.outages.model import DetectorConfig, JudgedPoint
+from ecoflow_stats.outages.model import Decision, DetectorConfig, JudgedPoint
 
 if TYPE_CHECKING:
     from datetime import datetime
 
-    from ecoflow_stats.ports import DerivationStore, FailureLog, OutageStore, RunLog, SampleStore
+    from ecoflow_stats.ports import (
+        DecisionStore,
+        DerivationStore,
+        FailureLog,
+        OutageStore,
+        RunLog,
+        SampleStore,
+    )
 
 _DERIVATION_NAME = "outages"
 _DEFAULT_CONFIG = DetectorConfig()
+_VALID_VERDICTS: dict[str, frozenset[str]] = {
+    "gap": frozenset({"outage", "no_outage"}),
+    "legacy": frozenset({"real", "phantom"}),
+}
 
 
 def _params_hash(config: DetectorConfig) -> str:
@@ -147,4 +158,49 @@ def derive_outages(
     return True
 
 
-__all__ = ["derive_outages"]
+def record_decision(
+    device_id: int,
+    *,
+    target: Literal["gap", "legacy"],
+    start_ts: int,
+    end_ts: int,
+    verdict: Literal["outage", "no_outage", "real", "phantom"],
+    decision_store: DecisionStore,
+    now: datetime,
+) -> int:
+    """Record the user's verdict on a gap or a legacy outage event,
+    anchored to its own time interval so it survives every future
+    recompute (outages requirement: "A User Decision on a Gap Is
+    Durable and Survives Recomputation"; `derive_outages` above never
+    reads or writes `decisions` at all, so nothing here needs to
+    coordinate with it beyond sharing the same device).
+
+    Raises `ValueError` for a verdict that makes no sense for its
+    target (a `target="gap"` only ever resolves to `outage`/`no_outage`;
+    `target="legacy"` only ever to `real`/`phantom`) -- a mismatch is a
+    caller bug, not a legitimate choice `resolve()` would ever need to
+    handle.
+    """
+    valid = _VALID_VERDICTS[target]
+    if verdict not in valid:
+        raise ValueError(
+            f"verdict {verdict!r} is not valid for target {target!r} (expected one of {sorted(valid)})"
+        )
+    decision = Decision(
+        device_id=device_id,
+        target=target,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        verdict=verdict,
+        decided_at=int(now.timestamp()),
+    )
+    return decision_store.add(decision)
+
+
+def undo_decision(decision_id: int, *, decision_store: DecisionStore) -> None:
+    """Undo a previously recorded decision: it stops being active, but
+    stays in the audit trail, superseded by itself rather than deleted."""
+    decision_store.undo(decision_id)
+
+
+__all__ = ["derive_outages", "record_decision", "undo_decision"]

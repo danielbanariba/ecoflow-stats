@@ -116,6 +116,20 @@ class AppRunLike(Protocol):
     stopped_at: int | None
 
 
+class LegacyOutageLike(Protocol):
+    """The shape `resolve()` needs from one imported legacy outage event,
+    matching `storage.legacy.LegacyOutage` structurally — without
+    importing it (same pure-core boundary as `FailureLike`/`AppRunLike`
+    above)."""
+
+    id: int
+    start_ts: int
+    end_ts: int | None
+    soc_start: int | None
+    soc_end: int | None
+    flags: frozenset[str]
+
+
 @dataclass(frozen=True, slots=True)
 class JudgedPoint:
     """A judged (never unjudged) reading's minimal remembered shape: what
@@ -181,6 +195,29 @@ class Gap:
 
 
 @dataclass(frozen=True, slots=True)
+class Decision:
+    """A durable user verdict on a gap or a legacy outage event, anchored
+    to the target's time interval (not a derived row id) so it survives
+    every recompute (design D4; outages requirement "A User Decision on
+    a Gap Is Durable and Survives Recomputation"; storage `decisions`
+    table).
+
+    `id` and `superseded_by` are `None` for a decision not yet persisted
+    -- the shape `outages.service.record_decision` builds before handing
+    it to `DecisionStore.add`, which assigns the real id.
+    """
+
+    device_id: int
+    target: Literal["gap", "legacy"]
+    start_ts: int
+    end_ts: int
+    verdict: Literal["outage", "no_outage", "real", "phantom"]
+    decided_at: int
+    id: int | None = None
+    superseded_by: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Started:
     """A new below-floor event just began (`readings == 1`): a live
     caller alerts immediately, before the debounce confirms it official
@@ -236,6 +273,7 @@ __all__ = [
     "UNJUDGED",
     "AppRunLike",
     "Confirmed",
+    "Decision",
     "DetectorConfig",
     "Ended",
     "Event",
@@ -244,6 +282,7 @@ __all__ = [
     "GapClosed",
     "JudgedPoint",
     "Judgment",
+    "LegacyOutageLike",
     "Quiescent",
     "Started",
     "Transition",

@@ -64,6 +64,62 @@ def charge_history(samples: Sequence[tuple[int, Reading]]) -> list[ChargePoint]:
     ]
 
 
+_DEFAULT_MAX_FALLBACK_ROWS = 200
+
+
+def bucket_charge_history(
+    points: Sequence[ChargePoint],
+    *,
+    range_start: int,
+    range_end: int,
+    max_rows: int = _DEFAULT_MAX_FALLBACK_ROWS,
+) -> list[ChargePoint]:
+    """Downsample `points` (`charge_history`'s own one-row-per-sample
+    series) to at most `max_rows` points spanning `[range_start,
+    range_end)`, for the SoC chart's `<details>` accessibility fallback
+    table (DATA-04/UI-14, qa-report-data-01.md/qa-report-ui-01.md): a
+    full history's fallback table used to render one row per raw
+    sample -- ~64,777 rows / 6.8MB for this app's own seeded history,
+    ~10,080 for just a 7-day range -- even though the chart itself
+    (`/api/v1/battery/series`) already renders that many points fine;
+    a server-rendered `<table>` row has a per-row DOM/accessibility
+    cost a `<canvas>`/SVG chart point does not.
+
+    Mirrors the bucketing *concept* `web.routes.api._select_bucket`
+    already applies to the grid-voltage chart's own live data (coarser
+    buckets for a longer range), reimplemented here rather than
+    imported: `battery` is pure core (`tests/contract.
+    test_pure_core_imports` scans it for a forbidden `web`/`storage`
+    import), so it cannot import anything from `web.routes.api`.
+
+    A bucket's `soc` is the rounded average of its own present
+    (non-`None`) readings only, never pulled toward `0` by a missing
+    one (the project's standing NULL-discipline, Named Defect "Missing
+    read as zero") -- a bucket with no present reading at all stays
+    `None`. The chart's own live data source is completely unaffected;
+    this only reshapes the fallback table.
+    """
+    if range_end <= range_start or len(points) <= max_rows:
+        return list(points)
+    bucket_width_s = -(-(range_end - range_start) // max_rows)  # ceiling division
+    socs_by_bucket: dict[int, list[int]] = {}
+    bucket_order: list[int] = []
+    for point in points:
+        bucket_start = range_start + (point.ts - range_start) // bucket_width_s * bucket_width_s
+        if bucket_start not in socs_by_bucket:
+            socs_by_bucket[bucket_start] = []
+            bucket_order.append(bucket_start)
+        if point.soc is not None:
+            socs_by_bucket[bucket_start].append(point.soc)
+    return [
+        ChargePoint(
+            ts=bucket_start,
+            soc=round(sum(socs) / len(socs)) if (socs := socs_by_bucket[bucket_start]) else None,
+        )
+        for bucket_start in bucket_order
+    ]
+
+
 def depth_of_discharge(event: Event) -> int | Literal["unavailable"]:
     """Depth of discharge for one outage event: the starting charge
     minus the deepest point of discharge reached during it (battery
@@ -104,6 +160,7 @@ __all__ = [
     "ChargePoint",
     "DailyBatteryTrend",
     "battery_trend",
+    "bucket_charge_history",
     "charge_history",
     "depth_of_discharge",
 ]

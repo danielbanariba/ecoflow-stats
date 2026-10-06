@@ -155,6 +155,47 @@ def test_the_charge_line_chart_renders_with_its_fallback_table(
         application.database.close()
 
 
+def test_the_charge_line_fallback_table_is_bounded_for_a_long_history(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Pass-1 (DATA-04/UI-14, qa-report-data-01.md/qa-report-ui-01.md):
+    before this fix, the SoC chart's `<details>` fallback table
+    rendered one row per raw sample regardless of range length --
+    ~10,080 rows for a 7-day range sampled every minute (this test's
+    own shape, scaled down to 500 samples for test speed), and
+    ~64,777 for this app's own full seeded history. Every row costs
+    real DOM/accessibility overhead a `<canvas>`/SVG chart point does
+    not, so the fallback table must stay bounded regardless of how
+    many samples exist.
+
+    Pass-2 target: reverting `build_battery_view_model`'s new
+    `bucket_charge_history(...)` call (passing `charge_points`
+    straight to `charge_series`, as before) turns this red -- the
+    table would render exactly 500 rows, not <= 200."""
+    samples = [
+        (_RANGE_START + i * (604_800 // 500), Reading(soc=50 + (i % 50))) for i in range(500)
+    ]
+    application, device_id, client = _client(monkeypatch, tmp_path, samples=samples)
+    try:
+        with client:
+            page_response = client.get("/battery")
+            series_response = client.get(
+                "/api/v1/battery/series",
+                params={"device": device_id, "from": _RANGE_START, "to": _NOW_TS},
+            )
+
+        assert page_response.status_code == 200
+        table_rows = re.findall(r"<td>[^<]*</td>\s*<td>(\d+)%</td>", page_response.text)
+        assert len(table_rows) <= 200
+
+        # Regression guard: the chart's own live data source is a
+        # completely separate code path (`web.routes.api.
+        # battery_series_route`) and must keep every point.
+        assert len(series_response.json()["points"]) == 500
+    finally:
+        application.database.close()
+
+
 def test_the_dod_table_shows_a_computed_value_and_unavailable_for_a_missing_boundary(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

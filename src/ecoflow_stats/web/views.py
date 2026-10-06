@@ -14,7 +14,12 @@ from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from ecoflow_stats.battery.service import observed_autonomy
-from ecoflow_stats.battery.stats import battery_trend, charge_history, depth_of_discharge
+from ecoflow_stats.battery.stats import (
+    battery_trend,
+    bucket_charge_history,
+    charge_history,
+    depth_of_discharge,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -475,6 +480,14 @@ def build_battery_view_model(
     """
     ordered_events = sorted(outage_events, key=lambda event: event.start_ts, reverse=True)
     charge_points = charge_history(samples)
+    # DATA-04/UI-14: the fallback <details> table is bucketed/bounded
+    # (qa-report-data-01.md/qa-report-ui-01.md) -- the chart's own live
+    # data source (`series_src`) and `current_soc` below both keep
+    # reading `charge_points` unbucketed; only this table-bound series
+    # is reshaped.
+    fallback_points = bucket_charge_history(
+        charge_points, range_start=range_start, range_end=range_end
+    )
     trend = battery_trend(trend_days)
     latest_trend_day = trend[-1] if trend else None
     return BatteryViewModel(
@@ -483,7 +496,7 @@ def build_battery_view_model(
         range_start=range_start,
         range_end=range_end,
         charge_series=tuple(
-            BatteryChargePoint(ts=point.ts, soc=point.soc) for point in charge_points
+            BatteryChargePoint(ts=point.ts, soc=point.soc) for point in fallback_points
         ),
         dod_rows=tuple(build_battery_dod_row(event) for event in ordered_events),
         autonomy_rows=tuple(build_battery_autonomy_row(event) for event in ordered_events),

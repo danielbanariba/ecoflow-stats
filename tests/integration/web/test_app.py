@@ -120,6 +120,26 @@ def test_healthz_is_reachable_through_the_real_app_and_reports_the_seeded_device
     application.database.close()
 
 
+def test_the_status_api_is_reachable_through_the_real_app_and_reports_the_seeded_device(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Without wiring a real `ApiContext` into the lifespan, `GET
+    /api/v1/status` would 500 (no `app.state.api`) the first time a
+    real server actually served it, even though the route itself is
+    fully tested in isolation."""
+    application = _application(monkeypatch, tmp_path)
+    app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["schema"] == "ecoflow-stats.status/v1"
+    assert [d["id"] for d in body["devices"]] == [application.device_records[0].id]
+    application.database.close()
+
+
 def test_the_default_derive_job_is_started_with_the_applications_own_devices_and_clock(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

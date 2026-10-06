@@ -21,6 +21,9 @@ from fastapi import FastAPI
 from ecoflow_stats.acquisition.collector import run_forever
 from ecoflow_stats.jobs import SupervisedTask, SupervisedTaskHandle, run_derive_forever
 from ecoflow_stats.outages.model import DetectorConfig
+from ecoflow_stats.storage.outages import OutageStore
+from ecoflow_stats.web.routes.api import ApiContext
+from ecoflow_stats.web.routes.api import router as api_router
 from ecoflow_stats.web.routes.health import HealthContext
 from ecoflow_stats.web.routes.health import router as health_router
 
@@ -96,6 +99,21 @@ def _build_health_context(application: Application, handle: SupervisedTaskHandle
     )
 
 
+def _build_api_context(application: Application) -> ApiContext:
+    return ApiContext(
+        now=application.clock.now,
+        stale_threshold_s=application.settings.stale_threshold,
+        poll_interval_s=application.settings.poll_interval,
+        detector_config=DetectorConfig(
+            threshold_v=application.settings.outage_threshold_v,
+            gap_threshold_s=application.settings.gap_threshold,
+        ),
+        sample_store=application.sample_store,
+        outage_store=OutageStore(application.database.writer),
+        device_records=application.device_records,
+    )
+
+
 def create_app(
     application: Application,
     *,
@@ -117,6 +135,7 @@ def create_app(
         app.state.derive_job_handle = derive_handle
         app.state.application = application
         app.state.health = _build_health_context(application, handle)
+        app.state.api = _build_api_context(application)
         try:
             yield
         finally:
@@ -129,6 +148,7 @@ def create_app(
 
     app = FastAPI(title="ecoflow-stats", lifespan=lifespan)
     app.include_router(health_router)
+    app.include_router(api_router)
     return app
 
 

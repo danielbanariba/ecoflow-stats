@@ -106,6 +106,83 @@ function initMainsStripChart(el) {
     });
 }
 
+// The battery charge (SoC) line is client-fetched from its own
+// `data-src` (`/api/v1/battery/series`, battery requirement "Charge
+// History"), matching the mains-strip chart's own fetch-then-render
+// pattern. `point.soc` is `null` on a sample that never reported a
+// charge reading -- left as a `null` data point rather than coerced to
+// `0`, so ECharts breaks the line there instead of drawing a fabricated
+// drop to empty.
+function initSocLineChart(el) {
+  const src = el.dataset.src;
+  if (!src) {
+    return;
+  }
+  fetch(src)
+    .then((response) => response.json())
+    .then((body) => {
+      const points = body.points.map((point) => [point.ts * 1000, point.soc]);
+      const chart = window.echarts.init(el, null, { renderer: "svg" });
+      chart.setOption({
+        animation: !prefersReducedMotion(),
+        tooltip: {},
+        xAxis: { type: "time" },
+        yAxis: { min: 0, max: 100 },
+        series: [
+          {
+            type: "line",
+            showSymbol: false,
+            sampling: "lttb",
+            data: points,
+          },
+        ],
+      });
+      window.addEventListener("resize", () => chart.resize());
+    })
+    .catch(() => {
+      el.setAttribute("data-chart-error", "true");
+    });
+}
+
+// The battery cycle-count / state-of-health trend is client-fetched
+// from its own `data-src` (`/api/v1/battery/trends`, battery
+// requirement "Cycle Count and State-of-Health Trends") -- two series
+// on independent y-axes, since a cycle count and a SoH percentage share
+// no common scale.
+function initBatteryTrendChart(el) {
+  const src = el.dataset.src;
+  if (!src) {
+    return;
+  }
+  fetch(src)
+    .then((response) => response.json())
+    .then((body) => {
+      const days = body.days.map((day) => day.day);
+      const cycles = body.days.map((day) => day.cycles_last);
+      const soh = body.days.map((day) => day.soh_last);
+      const chart = window.echarts.init(el, null, { renderer: "svg" });
+      chart.setOption({
+        animation: !prefersReducedMotion(),
+        tooltip: { trigger: "axis" },
+        legend: {},
+        grid: { containLabel: true },
+        xAxis: { type: "category", data: days },
+        yAxis: [
+          { type: "value", name: "cycles" },
+          { type: "value", name: "SoH %", min: 0, max: 100 },
+        ],
+        series: [
+          { name: "cycles", type: "line", yAxisIndex: 0, data: cycles },
+          { name: "SoH", type: "line", yAxisIndex: 1, data: soh },
+        ],
+      });
+      window.addEventListener("resize", () => chart.resize());
+    })
+    .catch(() => {
+      el.setAttribute("data-chart-error", "true");
+    });
+}
+
 function initCharts() {
   if (typeof window.echarts === "undefined") {
     return; // this page did not load echarts.min.js
@@ -118,6 +195,10 @@ function initCharts() {
       initHeatmapChart(el);
     } else if (el.dataset.chart === "mains-strip") {
       initMainsStripChart(el);
+    } else if (el.dataset.chart === "soc-line") {
+      initSocLineChart(el);
+    } else if (el.dataset.chart === "battery-trend") {
+      initBatteryTrendChart(el);
     }
     el.dataset.chartInitialized = "true";
   });

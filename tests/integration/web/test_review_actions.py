@@ -91,7 +91,12 @@ def _client(
     outage_store = OutageStore(application.database.writer)
     outage_store.replace_from(device.id, None, [], gaps or [])
     application.database.writer.commit()
-    app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+    app = create_app(
+        application,
+        start_collector=_never_ticks,
+        start_derive_job=_never_ticks,
+        start_rollups_job=_never_ticks,
+    )
     return application, device.id, TestClient(app)
 
 

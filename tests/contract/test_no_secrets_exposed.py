@@ -99,7 +99,12 @@ def test_no_page_partial_or_api_response_contains_a_configured_secret(
     the JSON status API with real rendered/serialized content."""
     application = _build(monkeypatch, tmp_path, password=None)
     try:
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with TestClient(app) as client:
             responses = {
@@ -124,7 +129,12 @@ def test_the_login_page_never_shows_the_configured_password(
     failed-attempt redisplay."""
     application = _build(monkeypatch, tmp_path, password=_PASSWORD)
     try:
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with TestClient(app) as client:
             login_page = client.get("/login")
@@ -146,7 +156,12 @@ def test_an_authenticated_overview_page_never_shows_the_configured_password(
     `Settings` object instead."""
     application = _build(monkeypatch, tmp_path, password=_PASSWORD)
     try:
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with TestClient(app) as client:
             client.post("/login", data={"password": _PASSWORD, "next": "/"})

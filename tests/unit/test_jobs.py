@@ -230,3 +230,93 @@ async def test_run_derive_forever_sleeps_the_configured_interval_between_ticks(
         db.close()
 
     assert (clock.now() - start).total_seconds() == 300
+
+
+# --- run_rollups_forever (visual-QA batch fix01, fix 5) ---------------------
+
+
+@pytest.mark.anyio
+async def test_run_rollups_forever_calls_derive_rollups_once_per_device_every_tick(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Pass-1: before fix 5, `derive_rollups` was fully implemented and
+    tested in isolation but had zero production callers, so a real
+    deployment's `daily_rollups` table would stay empty forever. This
+    proves a scheduled job actually gives every configured device its
+    own recompute attempt on every tick, in the order configured --
+    mirroring `run_derive_forever`'s own per-device cadence."""
+    db = Database(tmp_path / "ecoflow-stats.db")
+    calls: list[int] = []
+
+    def fake_derive_rollups(device_id: int, **_kwargs: object) -> bool:
+        calls.append(device_id)
+        if len(calls) >= 4:
+            raise asyncio.CancelledError
+        return True
+
+    monkeypatch.setattr(jobs, "derive_rollups", fake_derive_rollups)
+    clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await jobs.run_rollups_forever([10, 20], database=db, clock=clock, interval_s=3600)
+    finally:
+        db.close()
+
+    assert calls == [10, 20, 10, 20]
+
+
+@pytest.mark.anyio
+async def test_run_rollups_forever_isolates_one_devices_failure_from_the_rest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A recompute bug or a transient error for one device must not stop
+    the same tick's recompute for every other configured device --
+    mirroring `run_derive_forever`'s own per-tick failure isolation."""
+    db = Database(tmp_path / "ecoflow-stats.db")
+    calls: list[int] = []
+
+    def fake_derive_rollups(device_id: int, **_kwargs: object) -> bool:
+        calls.append(device_id)
+        if device_id == 10:
+            raise RuntimeError("boom")
+        if len(calls) >= 2:
+            raise asyncio.CancelledError
+        return True
+
+    monkeypatch.setattr(jobs, "derive_rollups", fake_derive_rollups)
+    clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await jobs.run_rollups_forever([10, 20], database=db, clock=clock, interval_s=3600)
+    finally:
+        db.close()
+
+    assert calls == [10, 20]
+
+
+@pytest.mark.anyio
+async def test_run_rollups_forever_sleeps_the_configured_interval_between_ticks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    db = Database(tmp_path / "ecoflow-stats.db")
+    calls: list[int] = []
+
+    def fake_derive_rollups(device_id: int, **_kwargs: object) -> bool:
+        calls.append(device_id)
+        if len(calls) >= 2:
+            raise asyncio.CancelledError
+        return True
+
+    monkeypatch.setattr(jobs, "derive_rollups", fake_derive_rollups)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    clock = FakeClock(start)
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await jobs.run_rollups_forever([1], database=db, clock=clock, interval_s=3600)
+    finally:
+        db.close()
+
+    assert (clock.now() - start).total_seconds() == 3600

@@ -71,7 +71,12 @@ def test_two_devices_show_one_at_a_time_with_a_named_selector_offered(
         first, second = application.device_records
         application.sample_store.add(first.id, _NOW_TS - 10, 1, Reading(grid_v=120.0, soc=81))
         application.sample_store.add(second.id, _NOW_TS - 10, 1, Reading(grid_v=0.0, soc=20))
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with TestClient(app) as client:
             response = client.get("/")
@@ -94,7 +99,12 @@ def test_switching_the_selector_switches_the_shown_data(
         first, second = application.device_records
         application.sample_store.add(first.id, _NOW_TS - 10, 1, Reading(grid_v=120.0, soc=81))
         application.sample_store.add(second.id, _NOW_TS - 10, 1, Reading(grid_v=0.0, soc=20))
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with TestClient(app) as client:
             response = client.get(f"/?device={second.id}")
@@ -112,7 +122,12 @@ def test_a_newly_configured_device_with_no_sample_shows_an_explicit_empty_state(
     (amendment item 9) — never blank charts or a zero-valued reading."""
     application = _build(monkeypatch, tmp_path, devices="TESTDEV0001")
     try:
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with TestClient(app) as client:
             response = client.get("/")
@@ -133,7 +148,12 @@ def test_a_stale_sample_shows_an_explicit_stale_indicator_with_the_data_age(
     try:
         (device,) = application.device_records
         application.sample_store.add(device.id, _NOW_TS - 9000, 1, Reading(grid_v=120.0, soc=55))
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with TestClient(app) as client:
             response = client.get("/")
@@ -156,7 +176,12 @@ def test_primary_navigation_links_to_outages_and_battery_but_not_unbuilt_pages(
     would send a visitor to a 404."""
     application = _build(monkeypatch, tmp_path, devices="TESTDEV0001")
     try:
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with TestClient(app) as client:
             response = client.get("/")
@@ -178,7 +203,12 @@ def test_the_device_choice_persists_via_cookie_across_a_second_request(
         first, second = application.device_records
         application.sample_store.add(first.id, _NOW_TS - 10, 1, Reading(grid_v=120.0, soc=81))
         application.sample_store.add(second.id, _NOW_TS - 10, 1, Reading(grid_v=0.0, soc=20))
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with TestClient(app) as client:
             client.get(f"/?device={second.id}")

@@ -71,7 +71,12 @@ def test_a_client_outside_the_allowed_networks_is_denied_with_a_403_page(
     configured, so the LAN guard is the only protection in effect."""
     application = _build(monkeypatch, tmp_path)
     try:
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with TestClient(app, client=_OUTSIDE_LAN) as client:
             response = client.get("/")
@@ -89,7 +94,12 @@ def test_an_allowed_range_client_is_served_normally(
     """Scenario "an allowed-range client is served normally"."""
     application = _build(monkeypatch, tmp_path)
     try:
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with TestClient(app, client=_INSIDE_LAN) as client:
             response = client.get("/")
@@ -109,7 +119,12 @@ def test_the_health_check_stays_reachable_from_outside_the_allowed_networks(
     coupled to where it happens to run."""
     application = _build(monkeypatch, tmp_path)
     try:
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with TestClient(app, client=_OUTSIDE_LAN) as client:
             response = client.get("/healthz")
@@ -125,7 +140,12 @@ def test_no_password_configured_emits_a_visible_startup_warning(
     """Scenario "No password means open access and a warning"."""
     application = _build(monkeypatch, tmp_path)
     try:
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with caplog.at_level(logging.WARNING), TestClient(app, client=_INSIDE_LAN):
             pass

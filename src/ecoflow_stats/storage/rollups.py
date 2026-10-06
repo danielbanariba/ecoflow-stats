@@ -4,12 +4,16 @@ separate from raw samples and recomputable; design-data section 2).
 
 The table carries battery, energy and grid columns together in one row
 (design-data's DDL), but each capability only ever owns a subset of
-those columns. This slice (Phase 17) writes only the battery-field
+those columns. :meth:`RollupStore.upsert` writes only the battery-field
 subset (``soc_min``, ``soc_max``, ``cycles_last``, ``soh_last``,
-``batt_temp_max``); :meth:`RollupStore.upsert` therefore ``UPDATE``s only
-those five columns on conflict, so a later write from the energy or
-grid derivation (Phases 18/20) for the same ``(device_id, day)`` row
-never clobbers what this one already wrote, and vice versa.
+``batt_temp_max``); :meth:`RollupStore.upsert_energy` (visual-QA batch
+fix01, fix 6) writes only the seven energy-field columns
+(``chg_ac_wh``, ``chg_dc_wh``, ``chg_solar_wh``, ``dsg_ac_wh``,
+``dsg_dc_wh``, ``chg_ac_est_wh``, ``energy_flags``). Each method's
+``ON CONFLICT`` clause ``UPDATE``s only its own columns, so a write
+from one capability for a given ``(device_id, day)`` row never clobbers
+what another capability already wrote there. The grid columns (Phase
+20) still have no write path.
 """
 
 from __future__ import annotations
@@ -85,6 +89,57 @@ class RollupStore:
             " soh_last = excluded.soh_last,"
             " batt_temp_max = excluded.batt_temp_max",
             (device_id, day, soc_min, soc_max, cycles_last, soh_last, batt_temp_max),
+        )
+
+    def upsert_energy(
+        self,
+        device_id: int,
+        day: str,
+        *,
+        chg_ac_wh: float,
+        chg_dc_wh: float,
+        chg_solar_wh: float,
+        dsg_ac_wh: float,
+        dsg_dc_wh: float,
+        chg_ac_est_wh: float,
+        energy_flags: int,
+    ) -> None:
+        """Insert or replace one day's energy fields, touching only
+        those seven columns -- a sibling to `upsert` rather than an
+        extension of it, so the same column-scoped-ON-CONFLICT pattern
+        this table's DDL comment calls for applies here too: a fresh
+        row gets every other column's SQL default, and an existing row
+        keeps whatever battery/grid fields a different derivation
+        already wrote there (visual-QA batch fix01, fix 6: these seven
+        columns -- `chg_ac_wh`/`chg_dc_wh`/`chg_solar_wh`/`dsg_ac_wh`/
+        `dsg_dc_wh`/`chg_ac_est_wh`/`energy_flags` -- had no write path
+        at all before this method; `energy.service.daily_energy_for_
+        samples` computed them correctly but nothing ever persisted
+        them)."""
+        self._conn.execute(
+            "INSERT INTO daily_rollups"
+            " (device_id, day, chg_ac_wh, chg_dc_wh, chg_solar_wh, dsg_ac_wh, dsg_dc_wh,"
+            " chg_ac_est_wh, energy_flags)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT (device_id, day) DO UPDATE SET"
+            " chg_ac_wh = excluded.chg_ac_wh,"
+            " chg_dc_wh = excluded.chg_dc_wh,"
+            " chg_solar_wh = excluded.chg_solar_wh,"
+            " dsg_ac_wh = excluded.dsg_ac_wh,"
+            " dsg_dc_wh = excluded.dsg_dc_wh,"
+            " chg_ac_est_wh = excluded.chg_ac_est_wh,"
+            " energy_flags = excluded.energy_flags",
+            (
+                device_id,
+                day,
+                chg_ac_wh,
+                chg_dc_wh,
+                chg_solar_wh,
+                dsg_ac_wh,
+                dsg_dc_wh,
+                chg_ac_est_wh,
+                energy_flags,
+            ),
         )
 
     def get(self, device_id: int, day: str) -> DailyRollup | None:

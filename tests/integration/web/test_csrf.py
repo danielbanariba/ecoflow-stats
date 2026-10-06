@@ -64,7 +64,12 @@ def _build(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> bootstrap.Applica
 
 
 def _app(application: bootstrap.Application) -> FastAPI:
-    return create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+    return create_app(
+        application,
+        start_collector=_never_ticks,
+        start_derive_job=_never_ticks,
+        start_rollups_job=_never_ticks,
+    )
 
 
 def _iter_api_routes(routes: Iterable[object]) -> Iterator[APIRoute]:

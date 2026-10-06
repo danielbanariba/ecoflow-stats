@@ -22,7 +22,12 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from ecoflow_stats.acquisition.collector import run_forever
-from ecoflow_stats.jobs import SupervisedTask, SupervisedTaskHandle, run_derive_forever
+from ecoflow_stats.jobs import (
+    SupervisedTask,
+    SupervisedTaskHandle,
+    run_derive_forever,
+    run_rollups_forever,
+)
 from ecoflow_stats.outages.model import DetectorConfig
 from ecoflow_stats.storage.decisions import DecisionStore
 from ecoflow_stats.storage.outages import OutageStore
@@ -101,6 +106,30 @@ def _start_derive_job(application: Application) -> SupervisedTaskHandle:
     return SupervisedTaskHandle(supervised=supervised, task=task)
 
 
+def _start_rollups_job(application: Application) -> SupervisedTaskHandle:
+    """Production default: run the hourly rollups job under supervision,
+    started right alongside the collector and the derive job (visual-QA
+    batch fix01, fix 5). `rollups.service.derive_rollups` was fully
+    implemented and tested in isolation but, like the derive job before
+    batch 7's fix, was never actually wired into the real server
+    process -- a real deployment's `daily_rollups` table, and therefore
+    the battery page's DoD/trend/autonomy tables, would stay empty
+    forever.
+    """
+
+    async def _run() -> None:
+        await run_rollups_forever(
+            tuple(record.id for record in application.device_records),
+            database=application.database,
+            clock=application.clock,
+            tz=application.settings.tz,
+        )
+
+    supervised = SupervisedTask(name="rollups-job", target=_run, clock=application.clock)
+    task = asyncio.create_task(supervised.run())
+    return SupervisedTaskHandle(supervised=supervised, task=task)
+
+
 def _build_health_context(application: Application, handle: SupervisedTaskHandle) -> HealthContext:
     return HealthContext(
         now_s=lambda: int(application.clock.now().timestamp()),
@@ -164,12 +193,13 @@ def create_app(
     *,
     start_collector: Callable[[Application], SupervisedTaskHandle] = _start_collector,
     start_derive_job: Callable[[Application], SupervisedTaskHandle] = _start_derive_job,
+    start_rollups_job: Callable[[Application], SupervisedTaskHandle] = _start_rollups_job,
 ) -> FastAPI:
     """Build the FastAPI app around `application`.
 
-    `start_collector` and `start_derive_job` default to the real
-    collector and derive job; tests pass a fake that starts a bounded,
-    network-free task instead.
+    `start_collector`, `start_derive_job`, and `start_rollups_job`
+    default to the real collector, derive job, and rollups job; tests
+    pass a fake that starts a bounded, network-free task instead.
     """
 
     @asynccontextmanager
@@ -181,8 +211,10 @@ def create_app(
             )
         handle = start_collector(application)
         derive_handle = start_derive_job(application)
+        rollups_handle = start_rollups_job(application)
         app.state.collector_handle = handle
         app.state.derive_job_handle = derive_handle
+        app.state.rollups_job_handle = rollups_handle
         app.state.application = application
         app.state.health = _build_health_context(application, handle)
         app.state.api = _build_api_context(application)
@@ -191,9 +223,9 @@ def create_app(
         try:
             yield
         finally:
-            for running in (handle, derive_handle):
+            for running in (handle, derive_handle, rollups_handle):
                 running.task.cancel()
-            for running in (handle, derive_handle):
+            for running in (handle, derive_handle, rollups_handle):
                 with contextlib.suppress(asyncio.CancelledError):
                     await running.task
             application.run_log.stop(application.run_id, int(application.clock.now().timestamp()))

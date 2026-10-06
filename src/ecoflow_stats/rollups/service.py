@@ -2,11 +2,15 @@
 
 Decides whether a device's `daily_rollups` can resume from the dirty
 day onward or need a full recompute, then re-aggregates each affected
-day's stored samples into this slice's battery-field columns
-(`cycles_last`, `soh_last`, `soc_min`/`max`, `batt_temp_max`). Energy
-and grid fields extend this module's per-day aggregation in Phases
-18/20 -- see the module docstring's "additively extensible" note in
-`storage.rollups`.
+day's stored samples into both the battery-field columns
+(`cycles_last`, `soh_last`, `soc_min`/`max`, `batt_temp_max`) and, since
+visual-QA batch fix01 (fix 6), the energy-field columns
+(`chg_ac_wh`/`chg_dc_wh`/`chg_solar_wh`/`dsg_ac_wh`/`dsg_dc_wh`/
+`chg_ac_est_wh`/`energy_flags`), composing `energy.service.
+daily_energy_for_samples` -- one job run now produces both capabilities'
+columns for the same row, matching `storage.rollups`'s "additively
+extensible" design intent. Grid fields still extend this module's
+per-day aggregation in a future Phase 20.
 
 Mirrors `outages.service.derive_outages`'s shape closely: the caller
 owns the surrounding `BEGIN IMMEDIATE` transaction and commits it once,
@@ -30,6 +34,7 @@ from datetime import datetime
 from functools import partial
 from typing import TYPE_CHECKING
 
+from ecoflow_stats.energy.service import daily_energy_for_samples
 from ecoflow_stats.timeutil import day_bounds, local_day
 
 if TYPE_CHECKING:
@@ -41,6 +46,18 @@ if TYPE_CHECKING:
 
 _DERIVATION_NAME = "rollups"
 _ROLLUP_VERSION = 1
+
+_ENERGY_FLAG_BITS: dict[str, int] = {"counter_reset": 1, "implausible_jump": 2, "gap_prorated": 4}
+"""Mirrors the `energy_flags` bitmask `storage.rollups`' DDL documents
+(migration 0001: "1 counter_reset, 2 implausible_jump, 4 gap_prorated")
+-- the same flag names `energy.accounting.DailyEnergy.flags` already
+reports, encoded here for storage in a single INTEGER column (this
+table's own DDL choice, unlike the sorted-string-join
+`storage.legacy.LegacyStore` uses for its own `flags` column)."""
+
+
+def _encode_energy_flags(flags: frozenset[str]) -> int:
+    return sum(_ENERGY_FLAG_BITS[flag] for flag in flags)
 
 
 def _params_hash() -> str:
@@ -113,13 +130,27 @@ def derive_rollups(
     day_fn: Callable[[int], str] | None = None,
     full: bool = False,
 ) -> bool:
-    """Recompute device ``device_id``'s daily rollups -- today, this
-    slice's battery-field columns only.
+    """Recompute device ``device_id``'s daily rollups: the battery-field
+    columns, and (visual-QA batch fix01, fix 6) the energy-field columns.
 
     Days are bucketed by ``timeutil.local_day`` under ``tz`` (energy
     requirement "Day Boundaries Use a Configurable Local Timezone")
     unless ``day_fn`` overrides it -- the seam this module's previous
     ``_utc_day`` placeholder (Phase 17) existed for, now closed.
+
+    Known gap (same category as apply-progress-batch13's documented
+    gaps, not fixed here): on an INCREMENTAL run, the energy window
+    queried is ``[lower, now_ts]`` -- the same window the battery
+    fields use -- so the very first in-window reading of each counter
+    field establishes a fresh baseline with no credited delta, exactly
+    like a device's genuine first-ever sample. Any energy that moved
+    between the last sample *before* ``lower`` and that first in-window
+    sample is therefore not credited to either day. Fixing this would
+    need a "last sample at or before a timestamp" query on
+    ``storage.samples.SampleStore``, which is outside this batch's
+    declared edit surface. A ``full=True`` recompute is unaffected (its
+    window starts at the beginning of all stored samples, where this
+    same baseline behavior is already correct).
 
     Starting point: no stored derivation, or a version/parameter change
     -> full recompute from the beginning of all stored samples; a dirty
@@ -159,8 +190,21 @@ def derive_rollups(
 
     now_ts = int(now.timestamp())
     samples_by_day: dict[str, list[tuple[int, Reading]]] = {}
+    all_samples: list[tuple[int, Reading]] = []
     for row in sample_store.between(device_id, lower, now_ts):
         samples_by_day.setdefault(effective_day_fn(row.ts), []).append((row.ts, row.reading))
+        all_samples.append((row.ts, row.reading))
+
+    # Energy accounting needs the whole queried range at once -- its own
+    # counter-delta segmentation can prorate one segment across a day
+    # boundary (`energy.accounting.split_by_local_days`), unlike the
+    # battery fields above, which only ever look at one day's samples
+    # independently. Keyed by the same `local_day(ts, tz)` the
+    # `effective_day_fn` default also uses, so both lookups agree on day
+    # boundaries whenever no test overrides `day_fn`. `tariff`/`currency`
+    # are irrelevant here: only the Wh/flags fields are persisted, never
+    # `DailyEnergy.cost`/`currency`.
+    energy_by_day = daily_energy_for_samples(all_samples, tz=tz, tariff=None, currency="")
 
     for day, day_samples in samples_by_day.items():
         soc_min, soc_max, cycles_last, soh_last, batt_temp_max = _daily_battery_fields(day_samples)
@@ -173,6 +217,19 @@ def derive_rollups(
             soh_last=soh_last,
             batt_temp_max=batt_temp_max,
         )
+        energy = energy_by_day.get(day)
+        if energy is not None:
+            rollup_store.upsert_energy(
+                device_id,
+                day,
+                chg_ac_wh=energy.chg_ac_wh,
+                chg_dc_wh=energy.chg_dc_wh,
+                chg_solar_wh=energy.chg_solar_wh,
+                dsg_ac_wh=energy.dsg_ac_wh,
+                dsg_dc_wh=energy.dsg_dc_wh,
+                chg_ac_est_wh=energy.chg_ac_est_wh,
+                energy_flags=_encode_energy_flags(energy.flags),
+            )
 
     derivation_store.mark_computed(
         device_id,

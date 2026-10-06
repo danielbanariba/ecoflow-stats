@@ -77,7 +77,12 @@ def test_an_unauthenticated_request_to_a_protected_route_is_rejected(
     rejected": a challenge/redirect, never the content."""
     application = _build(monkeypatch, tmp_path)
     try:
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with TestClient(app, client=_LOCAL_CLIENT, follow_redirects=False) as client:
             response = client.get("/")
@@ -95,7 +100,12 @@ def test_the_health_check_remains_reachable_without_credentials(
     credentials"."""
     application = _build(monkeypatch, tmp_path)
     try:
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with TestClient(app, client=_LOCAL_CLIENT) as client:
             response = client.get("/healthz")
@@ -111,7 +121,12 @@ def test_the_correct_password_is_accepted_and_grants_a_session(
     """Scenario "The correct password is accepted"."""
     application = _build(monkeypatch, tmp_path)
     try:
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with TestClient(app, client=_LOCAL_CLIENT) as client:
             login_response = client.post("/login", data={"password": _PASSWORD, "next": "/"})
@@ -130,7 +145,12 @@ def test_a_wrong_password_grants_no_session(
 ) -> None:
     application = _build(monkeypatch, tmp_path)
     try:
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with TestClient(app, client=_LOCAL_CLIENT, follow_redirects=False) as client:
             client.post("/login", data={"password": "totally-wrong", "next": "/"})
@@ -149,7 +169,12 @@ def test_session_cookie_is_httponly_and_samesite_lax(
     but not an arbitrary cross-site request."""
     application = _build(monkeypatch, tmp_path)
     try:
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with TestClient(app, client=_LOCAL_CLIENT, follow_redirects=False) as client:
             response = client.post("/login", data={"password": _PASSWORD, "next": "/"})
@@ -170,7 +195,12 @@ def test_a_wrong_password_attempt_is_really_delayed_by_the_real_login_route(
     design, "Password set": "a login throttle delays 1 s per failure"."""
     application = _build(monkeypatch, tmp_path)
     try:
-        app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
 
         with TestClient(app, client=_LOCAL_CLIENT) as client:
             started = time.monotonic()

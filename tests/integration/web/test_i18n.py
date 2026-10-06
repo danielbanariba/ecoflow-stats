@@ -57,7 +57,12 @@ def _app(
         monkeypatch.setenv(key, value)
     settings = load_settings(os.environ)
     application = bootstrap.build(settings, clock=FakeClock(_NOW))
-    app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+    app = create_app(
+        application,
+        start_collector=_never_ticks,
+        start_derive_job=_never_ticks,
+        start_rollups_job=_never_ticks,
+    )
     return TestClient(app), application
 
 

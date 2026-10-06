@@ -190,6 +190,144 @@ def test_upsert_never_touches_another_capabilitys_already_written_columns(env: _
     assert chg_ac_wh == 1234.5
 
 
+def test_upsert_energy_never_touches_another_capabilitys_already_written_columns(
+    env: _Env,
+) -> None:
+    """Visual-QA batch fix01, fix 6: mirrors `upsert`'s own column-
+    scoping guarantee for the energy side -- a later battery-field
+    write to the same `(device_id, day)` row must survive an earlier
+    energy-field upsert, and vice versa."""
+    device_id = env.device("BA31ZEB1SF7F0001")
+    RollupStore(env.writer).upsert(
+        device_id,
+        "2026-10-01",
+        soc_min=40,
+        soc_max=90,
+        cycles_last=10,
+        soh_last=98.0,
+        batt_temp_max=25.0,
+    )
+    env.writer.commit()
+
+    RollupStore(env.writer).upsert_energy(
+        device_id,
+        "2026-10-01",
+        chg_ac_wh=120.5,
+        chg_dc_wh=10.0,
+        chg_solar_wh=300.0,
+        dsg_ac_wh=50.0,
+        dsg_dc_wh=5.0,
+        chg_ac_est_wh=20.0,
+        energy_flags=1,
+    )
+    env.writer.commit()
+
+    (soc_min,) = env.writer.execute(
+        "SELECT soc_min FROM daily_rollups WHERE device_id = ? AND day = ?",
+        (device_id, "2026-10-01"),
+    ).fetchone()
+    assert soc_min == 40
+    row = env.writer.execute(
+        "SELECT chg_ac_wh, chg_dc_wh, chg_solar_wh, dsg_ac_wh, dsg_dc_wh,"
+        " chg_ac_est_wh, energy_flags FROM daily_rollups WHERE device_id = ? AND day = ?",
+        (device_id, "2026-10-01"),
+    ).fetchone()
+    assert tuple(row) == (120.5, 10.0, 300.0, 50.0, 5.0, 20.0, 1)
+
+
+def test_upsert_energy_on_the_same_key_replaces_rather_than_duplicates(env: _Env) -> None:
+    device_id = env.device("BA31ZEB1SF7F0001")
+    store = RollupStore(env.writer)
+    store.upsert_energy(
+        device_id,
+        "2026-10-01",
+        chg_ac_wh=100.0,
+        chg_dc_wh=0.0,
+        chg_solar_wh=0.0,
+        dsg_ac_wh=0.0,
+        dsg_dc_wh=0.0,
+        chg_ac_est_wh=0.0,
+        energy_flags=0,
+    )
+    env.writer.commit()
+
+    store.upsert_energy(
+        device_id,
+        "2026-10-01",
+        chg_ac_wh=250.0,
+        chg_dc_wh=0.0,
+        chg_solar_wh=0.0,
+        dsg_ac_wh=0.0,
+        dsg_dc_wh=0.0,
+        chg_ac_est_wh=0.0,
+        energy_flags=4,
+    )
+    env.writer.commit()
+
+    (chg_ac_wh, energy_flags) = env.writer.execute(
+        "SELECT chg_ac_wh, energy_flags FROM daily_rollups WHERE device_id = ? AND day = ?",
+        (device_id, "2026-10-01"),
+    ).fetchone()
+    assert (chg_ac_wh, energy_flags) == (250.0, 4)
+    (count,) = env.writer.execute(
+        "SELECT COUNT(*) FROM daily_rollups WHERE device_id = ? AND day = ?",
+        (device_id, "2026-10-01"),
+    ).fetchone()
+    assert count == 1
+
+
+# --- derive_rollups: energy-field aggregation (visual-QA batch fix01, fix 6) -
+
+
+def test_a_full_recompute_also_persists_energy_fields_for_the_same_day(env: _Env) -> None:
+    """Fix 5+6's core claim: one `derive_rollups` run produces both
+    battery and energy columns for the same row, matching the design's
+    "one row, additively extended by phase" intent. Pass-1: before fix
+    6, `storage.rollups.RollupStore.upsert` had no energy-column write
+    path at all, so `chg_ac_wh` etc. would stay their SQL default of
+    `NULL`/`0` forever even though `energy.service.daily_energy_for_
+    samples` computed the real figures correctly."""
+    device_id = env.device("BA31ZEB1SF7F0001")
+    env.insert(
+        device_id,
+        [
+            (0, _reading(soc=90, chg_ac_wh=0.0)),
+            (3_600, _reading(soc=85, chg_ac_wh=60.0)),  # +60 Wh in 1h
+        ],
+    )
+
+    assert env.derive(device_id) is True
+
+    (chg_ac_wh,) = env.writer.execute(
+        "SELECT chg_ac_wh FROM daily_rollups WHERE device_id = ? AND day = ?",
+        (device_id, "1970-01-01"),
+    ).fetchone()
+    assert chg_ac_wh == pytest.approx(60.0)
+
+
+def test_a_counter_reset_is_flagged_in_the_persisted_energy_flags_bitmask(env: _Env) -> None:
+    """The DDL documents `energy_flags` as a bitmask (1 counter_reset,
+    2 implausible_jump, 4 gap_prorated); a defect that stored the
+    flag names as a string, or dropped them, would silently lose this
+    signal in storage even though `DailyEnergy.flags` reported it."""
+    device_id = env.device("BA31ZEB1SF7F0001")
+    env.insert(
+        device_id,
+        [
+            (0, _reading(soc=90, chg_ac_wh=100.0)),
+            (3_600, _reading(soc=85, chg_ac_wh=10.0)),  # counter reset: 10 < 100
+        ],
+    )
+
+    assert env.derive(device_id) is True
+
+    (energy_flags,) = env.writer.execute(
+        "SELECT energy_flags FROM daily_rollups WHERE device_id = ? AND day = ?",
+        (device_id, "1970-01-01"),
+    ).fetchone()
+    assert energy_flags == 1
+
+
 # --- derive_rollups: battery-field aggregation ------------------------------
 
 

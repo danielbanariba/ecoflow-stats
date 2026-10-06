@@ -2,7 +2,8 @@
 with doubling backoff if it ever crashes, and exposing enough state for
 ``/healthz`` to report on once that exists (Phase 7).
 
-The collector and, later, the 5-minute derive job each run under their own
+The collector, the 5-minute derive job, and the hourly rollups job
+(visual-QA batch fix01, fix 5) each run under their own
 :class:`SupervisedTask` so that one crashed task is retried rather than
 silently stopping collection for good (acquisition: a tick failure must
 not stop future ticks).
@@ -18,9 +19,11 @@ from typing import TYPE_CHECKING
 
 from ecoflow_stats.outages.model import DetectorConfig
 from ecoflow_stats.outages.service import derive_outages
+from ecoflow_stats.rollups.service import derive_rollups
 from ecoflow_stats.storage.derivations import DerivationStore
 from ecoflow_stats.storage.failures import FailureLog
 from ecoflow_stats.storage.outages import OutageStore
+from ecoflow_stats.storage.rollups import RollupStore
 from ecoflow_stats.storage.runs import RunLog
 from ecoflow_stats.storage.samples import SampleStore
 
@@ -160,4 +163,61 @@ async def run_derive_forever(
         await clock.sleep_until(clock.now() + timedelta(seconds=interval_s))
 
 
-__all__ = ["SupervisedTask", "SupervisedTaskHandle", "run_derive_forever"]
+async def run_rollups_forever(
+    device_ids: Sequence[int],
+    *,
+    database: Database,
+    clock: Clock,
+    tz: str = "UTC",
+    interval_s: float = 3600.0,
+) -> None:
+    """Recompute daily rollups for every configured device every
+    ``interval_s`` seconds (default: hourly), forever, until cancelled.
+
+    Visual-QA batch fix01, fix 5: `rollups.service.derive_rollups` was
+    fully implemented and tested in isolation but had zero production
+    callers -- in a real deployment, `daily_rollups` would stay empty
+    forever, and the battery page's DoD/trend/autonomy tables would
+    show no data despite working perfectly in a manual test. An hourly
+    cadence is cheap after each device's first run: `derive_rollups`'s
+    own dirty-day tracking (`storage.derivations.DerivationStore`) only
+    recomputes days from the dirty mark onward, never the whole history
+    again, once a device is no longer in its very first full recompute.
+
+    Same per-device isolation and own-transaction-per-device shape as
+    `run_derive_forever`, so one device's recompute bug never starves
+    the others, or the next tick, of a recompute.
+    """
+    sample_store = SampleStore(database.writer)
+    rollup_store = RollupStore(database.writer)
+    derivation_store = DerivationStore(database.writer)
+    while True:
+        now = clock.now()
+        for device_id in device_ids:
+            database.writer.execute("BEGIN IMMEDIATE")
+            try:
+                derive_rollups(
+                    device_id,
+                    sample_store=sample_store,
+                    rollup_store=rollup_store,
+                    derivation_store=derivation_store,
+                    now=now,
+                    tz=tz,
+                )
+            except asyncio.CancelledError:
+                database.writer.rollback()
+                raise
+            except Exception:
+                database.writer.rollback()
+                logger.exception("rollups job failed for device id %s", device_id)
+            else:
+                database.writer.commit()
+        await clock.sleep_until(clock.now() + timedelta(seconds=interval_s))
+
+
+__all__ = [
+    "SupervisedTask",
+    "SupervisedTaskHandle",
+    "run_derive_forever",
+    "run_rollups_forever",
+]

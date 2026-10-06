@@ -117,7 +117,12 @@ def _client(
         for decision in decisions_factory(device.id):
             decision_store.add(decision)
     application.database.writer.commit()
-    app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+    app = create_app(
+        application,
+        start_collector=_never_ticks,
+        start_derive_job=_never_ticks,
+        start_rollups_job=_never_ticks,
+    )
     return application, device.id, TestClient(app)
 
 

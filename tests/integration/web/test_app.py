@@ -69,7 +69,12 @@ def test_lifespan_starts_the_collector_on_startup_and_cancels_it_on_shutdown(
         holder["handle"] = handle
         return handle
 
-    app = create_app(application, start_collector=start_collector, start_derive_job=_never_ticks)
+    app = create_app(
+        application,
+        start_collector=start_collector,
+        start_derive_job=_never_ticks,
+        start_rollups_job=_never_ticks,
+    )
 
     with TestClient(app):
         assert holder["handle"].alive is True
@@ -95,7 +100,43 @@ def test_lifespan_starts_the_derive_job_on_startup_and_cancels_it_on_shutdown(
         holder["handle"] = handle
         return handle
 
-    app = create_app(application, start_collector=_never_ticks, start_derive_job=start_derive_job)
+    app = create_app(
+        application,
+        start_collector=_never_ticks,
+        start_derive_job=start_derive_job,
+        start_rollups_job=_never_ticks,
+    )
+
+    with TestClient(app):
+        assert holder["handle"].alive is True
+
+    assert holder["handle"].alive is False
+    application.database.close()
+
+
+def test_lifespan_starts_the_rollups_job_on_startup_and_cancels_it_on_shutdown(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Visual-QA batch fix01, fix 5: without this, the hourly rollups
+    job (`jobs.run_rollups_forever`) is fully implemented and tested in
+    isolation but never actually runs in the real server process -- a
+    device fed only by the live collector would accumulate dirty
+    samples that nothing ever recomputes, exactly the same category of
+    gap batch 7's fix for the derive job closed."""
+    application = _application(monkeypatch, tmp_path)
+    holder: dict[str, SupervisedTaskHandle] = {}
+
+    def start_rollups_job(app: bootstrap.Application) -> SupervisedTaskHandle:
+        handle = _never_ticks(app)
+        holder["handle"] = handle
+        return handle
+
+    app = create_app(
+        application,
+        start_collector=_never_ticks,
+        start_derive_job=_never_ticks,
+        start_rollups_job=start_rollups_job,
+    )
 
     with TestClient(app):
         assert holder["handle"].alive is True
@@ -108,7 +149,12 @@ def test_healthz_is_reachable_through_the_real_app_and_reports_the_seeded_device
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     application = _application(monkeypatch, tmp_path)
-    app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+    app = create_app(
+        application,
+        start_collector=_never_ticks,
+        start_derive_job=_never_ticks,
+        start_rollups_job=_never_ticks,
+    )
 
     with TestClient(app) as client:
         response = client.get("/healthz")
@@ -128,7 +174,12 @@ def test_the_status_api_is_reachable_through_the_real_app_and_reports_the_seeded
     real server actually served it, even though the route itself is
     fully tested in isolation."""
     application = _application(monkeypatch, tmp_path)
-    app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+    app = create_app(
+        application,
+        start_collector=_never_ticks,
+        start_derive_job=_never_ticks,
+        start_rollups_job=_never_ticks,
+    )
 
     with TestClient(app) as client:
         response = client.get("/api/v1/status")
@@ -158,7 +209,7 @@ def test_the_default_derive_job_is_started_with_the_applications_own_devices_and
 
     monkeypatch.setattr(web_app, "run_derive_forever", _fake_run_derive_forever)
 
-    app = create_app(application, start_collector=_never_ticks)
+    app = create_app(application, start_collector=_never_ticks, start_rollups_job=_never_ticks)
 
     with TestClient(app):
         pass
@@ -166,6 +217,38 @@ def test_the_default_derive_job_is_started_with_the_applications_own_devices_and
     assert captured["device_ids"] == tuple(r.id for r in application.device_records)
     assert captured["database"] is application.database
     assert captured["clock"] is application.clock
+    application.database.close()
+
+
+def test_the_default_rollups_job_is_started_with_the_applications_own_devices_clock_and_tz(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Proves the production wiring point (not just an injectable test
+    double): `create_app`'s real default must hand `run_rollups_forever`
+    this exact application's device ids, database, clock, and
+    configured timezone -- the same way `_start_derive_job`'s default
+    already does for the derive job."""
+    application = _application(monkeypatch, tmp_path)
+    captured: dict[str, object] = {}
+
+    async def _fake_run_rollups_forever(device_ids: object, **kwargs: object) -> None:
+        captured["device_ids"] = device_ids
+        captured["database"] = kwargs["database"]
+        captured["clock"] = kwargs["clock"]
+        captured["tz"] = kwargs.get("tz")
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(web_app, "run_rollups_forever", _fake_run_rollups_forever)
+
+    app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
+
+    with TestClient(app):
+        pass
+
+    assert captured["device_ids"] == tuple(r.id for r in application.device_records)
+    assert captured["database"] is application.database
+    assert captured["clock"] is application.clock
+    assert captured["tz"] == application.settings.tz
     application.database.close()
 
 
@@ -193,7 +276,7 @@ def test_the_default_collector_is_started_with_the_applications_own_live_state_a
 
     monkeypatch.setattr(web_app, "run_forever", _fake_run_forever)
 
-    app = create_app(application, start_derive_job=_never_ticks)
+    app = create_app(application, start_derive_job=_never_ticks, start_rollups_job=_never_ticks)
 
     with TestClient(app):
         pass

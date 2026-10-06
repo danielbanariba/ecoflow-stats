@@ -53,6 +53,12 @@
           <button type="submit" class="glass-nav__lang-btn" {% if lang == 'es' %}aria-current="true"{% endif %}>ES</button>
         </form>
       </div>
+      {% if show_logout %}
+      <form method="post" action="/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="glass-nav__lang-btn">{{ t('nav.logout') }}</button>
+      </form>
+      {% endif %}
     </div>
   </header>
   <main id="main">

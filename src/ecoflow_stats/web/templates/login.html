@@ -7,8 +7,10 @@
 
 <section class="login-shell reveal" aria-label="Log in">
   <div class="tile">
-    {% if error %}
-    <p class="login-error" role="alert">Incorrect password. Please try again.</p>
+    {% if error == "wrong_password" %}
+    <p class="login-error" role="alert">{{ t('login.error.wrong_password') }}</p>
+    {% elif error == "throttled" %}
+    <p class="login-error" role="alert">{{ t('login.error.throttled').format(seconds=retry_after_s) }}</p>
     {% endif %}
 
     <form class="login-form" method="post" action="/login">

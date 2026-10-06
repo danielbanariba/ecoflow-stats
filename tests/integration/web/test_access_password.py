@@ -181,6 +181,46 @@ def test_a_wrong_password_grants_no_session(
         application.database.close()
 
 
+def test_a_wrong_password_and_a_throttled_lockout_show_different_messages(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UI-17 (qa-report-ui-01.md): the report's exact finding -- a wrong
+    password and a throttled lockout rendered the identical message,
+    giving a locked-out visitor no idea they are not simply mistyping
+    their password. Proves the two are not just individually present
+    somewhere, but genuinely distinct: the wrong-password page must
+    never also contain the throttled page's own text, and vice versa."""
+    application = _build(monkeypatch, tmp_path)
+    try:
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
+
+        with TestClient(app, client=_LOCAL_CLIENT, follow_redirects=True) as client:
+            headers = _csrf_headers(client, application)
+            wrong_password_response = client.post(
+                "/login", data={"password": "totally-wrong", "next": "/"}, headers=headers
+            )
+            for _ in range(10):
+                client.post(
+                    "/login", data={"password": "totally-wrong", "next": "/"}, headers=headers
+                )
+            throttled_response = client.post(
+                "/login", data={"password": "totally-wrong", "next": "/"}, headers=headers
+            )
+
+        assert "Incorrect password" in wrong_password_response.text
+        assert "Too many failed attempts" not in wrong_password_response.text
+
+        assert "Too many failed attempts" in throttled_response.text
+        assert "Incorrect password" not in throttled_response.text
+    finally:
+        application.database.close()
+
+
 def test_session_cookie_is_httponly_and_samesite_lax(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -212,12 +252,15 @@ def test_session_cookie_is_httponly_and_samesite_lax(
         application.database.close()
 
 
-def test_a_wrong_password_attempt_is_really_delayed_by_the_real_login_route(
+def test_a_wrong_password_attempt_is_not_delayed_by_the_real_login_route(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Proves the real production wiring (not just the pure
-    `LoginThrottle` class below) actually delays on a failed attempt —
-    design, "Password set": "a login throttle delays 1 s per failure"."""
+    """SEC-04 (qa-report-data-01.md): the real production route (not
+    just the pure `LoginThrottle` class below) must no longer block the
+    worker thread it runs on for a whole second per failed attempt --
+    that blocking `time.sleep` was the thread-pool-exhaustion risk the
+    QA report flagged. A single failed attempt now returns essentially
+    immediately."""
     application = _build(monkeypatch, tmp_path)
     try:
         app = create_app(
@@ -228,12 +271,48 @@ def test_a_wrong_password_attempt_is_really_delayed_by_the_real_login_route(
         )
 
         with TestClient(app, client=_LOCAL_CLIENT) as client:
-            headers = _csrf_headers(client, application)  # minted before timing starts
+            headers = _csrf_headers(client, application)
             started = time.monotonic()
             client.post("/login", data={"password": "totally-wrong", "next": "/"}, headers=headers)
             elapsed = time.monotonic() - started
 
-        assert elapsed >= 1.0
+        assert elapsed < 0.5
+    finally:
+        application.database.close()
+
+
+def test_the_real_login_route_rejects_with_429_and_retry_after_once_throttled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """SEC-04: once a client address is over the 10-failures-per-5-
+    minutes budget, the real production route must reject with
+    `429 Retry-After` instead of ever attempting to verify the
+    password again -- proves the route is actually wired to
+    `LoginThrottle.allow`/`retry_after`, not just that the pure class
+    computes the right numbers in isolation."""
+    application = _build(monkeypatch, tmp_path)
+    try:
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
+
+        with TestClient(app, client=_LOCAL_CLIENT, follow_redirects=False) as client:
+            headers = _csrf_headers(client, application)
+            for _ in range(10):
+                client.post(
+                    "/login", data={"password": "totally-wrong", "next": "/"}, headers=headers
+                )
+            eleventh = client.post(
+                "/login", data={"password": "totally-wrong", "next": "/"}, headers=headers
+            )
+
+        assert eleventh.status_code == 429
+        retry_after = int(eleventh.headers["retry-after"])
+        assert 0 < retry_after <= 301  # the full 300s window, plus the route's rounding-up second
+        assert "Too many failed attempts" in eleventh.text
     finally:
         application.database.close()
 
@@ -251,28 +330,69 @@ def test_a_password_change_invalidates_every_previously_issued_session() -> None
     assert verify_session_token(new_key, token, now=100) is False
 
 
-def test_login_throttle_delays_one_second_per_failure_and_caps_at_ten_in_five_minutes() -> None:
-    """Design, "Password set": "a login throttle delays 1 s per failure
-    and at most 10 failures per 5 minutes per client address"."""
-    sleeps: list[float] = []
+def test_logging_out_revokes_every_previously_issued_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """SEC-03 (qa-report-data-01.md): a signed session cookie must stop
+    working the moment `/logout` runs, not only after the next process
+    restart (the only revocation that existed before this fix, since
+    `app_secret` is fresh random bytes every `bootstrap.build` call).
+    Simulates the exact risk the report names: a copy of the cookie
+    taken before logout -- a stolen cookie, or the same browser's own
+    back button -- must be rejected afterward, not merely the
+    browser's own now-cleared cookie jar."""
+    application = _build(monkeypatch, tmp_path)
+    try:
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
+
+        with TestClient(app, client=_LOCAL_CLIENT, follow_redirects=False) as client:
+            client.post(
+                "/login",
+                data={"password": _PASSWORD, "next": "/"},
+                headers=_csrf_headers(client, application),
+            )
+            stolen_session_cookie = client.cookies["efs_session"]
+
+            client.post("/logout", headers=_csrf_headers(client, application))
+
+            client.cookies.set("efs_session", stolen_session_cookie)
+            replay_response = client.get("/")
+
+        assert replay_response.status_code == 303  # the stolen cookie no longer works
+    finally:
+        application.database.close()
+
+
+def test_login_throttle_caps_at_ten_failures_in_five_minutes_without_sleeping() -> None:
+    """Design, "Password set": "at most 10 failures per 5 minutes per
+    client address". SEC-04: `record_failure` must never sleep -- there
+    is no `sleep` parameter to inject at all any more, so a
+    reintroduced blocking call would be a `TypeError` here, not a
+    silent regression."""
     clock = {"t": 0.0}
-    throttle = LoginThrottle(now=lambda: clock["t"], sleep=sleeps.append)
+    throttle = LoginThrottle(now=lambda: clock["t"])
 
     for _ in range(10):
         assert throttle.allow("1.2.3.4") is True
         throttle.record_failure("1.2.3.4")
 
-    assert sleeps == [1.0] * 10
     assert throttle.allow("1.2.3.4") is False  # the 11th attempt is capped
+    assert throttle.retry_after("1.2.3.4") == pytest.approx(300.0)
 
     clock["t"] += 301  # advance past the 5-minute window
     assert throttle.allow("1.2.3.4") is True  # window expired, allowed again
+    assert throttle.retry_after("1.2.3.4") == 0.0
 
 
 def test_login_throttle_tracks_failures_per_client_address_independently() -> None:
     """A shared (non-per-address) counter would let one abusive address
     lock out every other legitimate client."""
-    throttle = LoginThrottle(now=lambda: 0.0, sleep=lambda _: None)
+    throttle = LoginThrottle(now=lambda: 0.0)
     for _ in range(10):
         throttle.record_failure("1.2.3.4")
 

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from ecoflow_stats.battery.stats import DailyBatteryTrend
@@ -33,8 +33,10 @@ from ecoflow_stats.web.security import (
     clear_session_cookie,
     csrf_cookie_value,
     csrf_token,
+    has_valid_session,
     issue_session_cookie,
     require_csrf,
+    revoke_all_sessions,
     safe_next_path,
     set_csrf_cookie,
     verify_password,
@@ -101,6 +103,13 @@ def _resolve_device(request: Request, ctx: PagesContext, requested: int | None) 
     )
 
 
+def _show_logout(request: Request, security: SecurityContext) -> bool:
+    """UI-10: the nav's logout control only makes sense when there is
+    something to log out of -- a password configured, and this exact
+    visitor currently holding a valid session for it."""
+    return security.password is not None and has_valid_session(request, security)
+
+
 def _live_view(ctx: PagesContext, device_id: int) -> object:
     status = get_status(
         device_id,
@@ -134,6 +143,7 @@ def overview_page(request: Request, device: int | None = None) -> HTMLResponse:
             "view": view,
             "csrf_token": csrf_token(security.app_secret, csrf_cookie),
             "active_nav": "overview",
+            "show_logout": _show_logout(request, security),
         },
     )
     response.set_cookie(DEVICE_COOKIE, str(selected_id), max_age=_COOKIE_MAX_AGE_S, samesite="lax")
@@ -215,6 +225,7 @@ def outages_page(
             "tz": api_ctx.tz,
             "active_nav": "outages",
             "csrf_token": csrf_token(security.app_secret, csrf_cookie),
+            "show_logout": _show_logout(request, security),
         },
     )
     response.set_cookie(DEVICE_COOKIE, str(selected_id), max_age=_COOKIE_MAX_AGE_S, samesite="lax")
@@ -318,6 +329,7 @@ def battery_page(
             "tz": request.app.state.api.tz,
             "active_nav": "battery",
             "csrf_token": csrf_token(security.app_secret, csrf_cookie),
+            "show_logout": _show_logout(request, security),
         },
     )
     response.set_cookie(DEVICE_COOKIE, str(selected_id), max_age=_COOKIE_MAX_AGE_S, samesite="lax")
@@ -340,11 +352,18 @@ def set_preferences(request: Request, lang: str = Form(...)) -> RedirectResponse
     return redirect
 
 
-@router.get("/login", response_class=HTMLResponse)
-def login_page(request: Request, next: str | None = None, error: bool = False) -> HTMLResponse:
-    """access-control "Optional Password Guards Every Route Except the
-    Health Check": the page `AccessControlMiddleware` redirects an
-    unauthenticated request to."""
+def _render_login(
+    request: Request,
+    *,
+    target: str,
+    error: str | None,
+    retry_after_s: int | None = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    """Shared by the GET page and the POST route's throttled-rejection
+    branch below -- both render the exact same template with the exact
+    same context shape, differing only in `error`/`retry_after_s`/
+    `status_code`."""
     ctx: PagesContext = request.app.state.pages
     security: SecurityContext = request.app.state.security
     lang = _resolve_lang(request, ctx)
@@ -356,36 +375,74 @@ def login_page(request: Request, next: str | None = None, error: bool = False) -
             "t": translator(lang, _CATALOGS),
             "lang": lang,
             "html_lang": html_lang(lang),
-            "next": safe_next_path(next),
+            "next": target,
             "error": error,
+            "retry_after_s": retry_after_s,
             "csrf_token": csrf_token(security.app_secret, csrf_cookie),
+            "show_logout": _show_logout(request, security),
         },
+        status_code=status_code,
     )
     if csrf_cookie_is_new:
         set_csrf_cookie(response, csrf_cookie, secure=request.url.scheme == "https")
     return response
 
 
+@router.get("/login", response_class=HTMLResponse)
+def login_page(request: Request, next: str | None = None, error: str | None = None) -> HTMLResponse:
+    """access-control "Optional Password Guards Every Route Except the
+    Health Check": the page `AccessControlMiddleware` redirects an
+    unauthenticated request to. `error` is a UI-17 message selector
+    (`"wrong_password"` or unset) -- the throttled case never arrives
+    here, it is rendered directly by `login_submit` below."""
+    return _render_login(request, target=safe_next_path(next), error=error)
+
+
 @router.post("/login", dependencies=[Depends(require_csrf)])
-def login_submit(
-    request: Request, password: str = Form(...), next: str = Form("/")
-) -> RedirectResponse:
+def login_submit(request: Request, password: str = Form(...), next: str = Form("/")) -> Response:
+    """UI-17: a wrong password and a throttled lockout now show distinct,
+    translated messages (`login.error.wrong_password` vs
+    `login.error.throttled`), the latter naming when to try again.
+
+    **SEC-04 fix**: a throttled attempt is rejected immediately with
+    `429 Retry-After`, rendered in place -- never a redirect back
+    through a second request, and never a blocking sleep anywhere on
+    this path (see `LoginThrottle`)."""
     security: SecurityContext = request.app.state.security
     target = safe_next_path(next)
     address = request.client.host if request.client else "unknown"
 
-    if security.password is not None and security.throttle.allow(address):
+    if security.password is not None:
+        if not security.throttle.allow(address):
+            retry_after_s = int(security.throttle.retry_after(address)) + 1
+            response = _render_login(
+                request,
+                target=target,
+                error="throttled",
+                retry_after_s=retry_after_s,
+                status_code=429,
+            )
+            response.headers["retry-after"] = str(retry_after_s)
+            return response
         if verify_password(password, security.password):
             response = RedirectResponse(url=target, status_code=303)
             issue_session_cookie(response, security, secure=request.url.scheme == "https")
             return response
         security.throttle.record_failure(address)
 
-    return RedirectResponse(url=f"/login?next={target}&error=1", status_code=303)
+    return RedirectResponse(url=f"/login?next={target}&error=wrong_password", status_code=303)
 
 
 @router.post("/logout", dependencies=[Depends(require_csrf)])
-def logout_submit() -> RedirectResponse:
+def logout_submit(request: Request) -> RedirectResponse:
+    """SEC-03: revokes every previously issued session (documented
+    single-user simplification in `revoke_all_sessions`) before
+    clearing this browser's own cookie, so a copy of the session token
+    taken before this call -- a stolen cookie, or just a back button on
+    the same machine -- stops working immediately, not only after the
+    next process restart."""
+    security: SecurityContext = request.app.state.security
+    request.app.state.security = revoke_all_sessions(security)
     response = RedirectResponse(url="/login", status_code=303)
     clear_session_cookie(response)
     return response

@@ -29,7 +29,7 @@ import json
 import logging
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
@@ -117,11 +117,17 @@ def verify_password(candidate: str, configured: str) -> bool:
     return hmac.compare_digest(_sha256(candidate), _sha256(configured))
 
 
-def session_signing_key(app_secret: bytes, password: str) -> bytes:
-    """`HMAC(app_state.secret, sha256(password))` (design, "Session"):
-    changing the configured password changes this key, which silently
-    invalidates every session token signed under the old one."""
-    return hmac.new(app_secret, _sha256(password), hashlib.sha256).digest()
+def session_signing_key(app_secret: bytes, password: str, generation: int = 0) -> bytes:
+    """`HMAC(app_state.secret, sha256(password) || generation)` (design,
+    "Session"): changing the configured password changes this key,
+    which silently invalidates every session token signed under the
+    old one. `generation` (default `0`, SEC-03) does the exact same
+    thing on purpose: `revoke_all_sessions` bumps it on logout, so every
+    token issued under the previous generation stops verifying
+    immediately, with no password change needed."""
+    return hmac.new(
+        app_secret, _sha256(password) + str(generation).encode("ascii"), hashlib.sha256
+    ).digest()
 
 
 def issue_session_token(signing_key: bytes, *, issued_at: int, expires_at: int) -> str:
@@ -157,20 +163,29 @@ def verify_session_token(signing_key: bytes, token: str, *, now: int) -> bool:
 
 @dataclass
 class LoginThrottle:
-    """ "A login throttle delays 1 s per failure and at most 10 failures
-    per 5 minutes per client address" (design, "Password set").
+    """ "At most 10 failures per 5 minutes per client address" (design,
+    "Password set").
 
-    `now` and `sleep` are injectable so a test proves the counting logic
-    deterministically, without waiting on a real clock or a real
-    second-long sleep; the production default (`time.monotonic`,
-    `time.sleep`) is what the real login route actually uses.
+    **SEC-04 fix** (qa-report-data-01.md): a failed attempt no longer
+    sleeps at all. The earlier version called a blocking `time.sleep`
+    (or an injected `sleep`) directly inside `record_failure` -- since
+    `login_submit` is a synchronous route, FastAPI runs it on its
+    thread-pool executor, so that sleep held one of those worker
+    threads hostage for its full duration; the QA report flagged this
+    as a residual, untested thread-pool-exhaustion risk under enough
+    concurrent bad attempts. `allow` is now the only signal the route
+    needs -- once a client is over budget, the route rejects
+    immediately with `429 Retry-After` (via `retry_after`) instead of
+    ever blocking a worker.
+
+    `now` is injectable so a test proves the counting logic
+    deterministically, without waiting on a real clock; the production
+    default (`time.monotonic`) is what the real login route uses.
     """
 
     now: Callable[[], float] = time.monotonic
-    sleep: Callable[[float], None] = time.sleep
     window_s: float = 300.0
     max_failures: int = 10
-    delay_s: float = 1.0
     _failures: dict[str, list[float]] = field(default_factory=dict)
 
     def allow(self, address: str) -> bool:
@@ -181,7 +196,15 @@ class LoginThrottle:
         recent = self._recent_failures(address)
         recent.append(self.now())
         self._failures[address] = recent
-        self.sleep(self.delay_s)
+
+    def retry_after(self, address: str) -> float:
+        """Seconds until `address`'s oldest counted failure falls out
+        of the window and `allow` would return `True` again -- `0.0`
+        when `address` isn't actually throttled right now."""
+        recent = self._recent_failures(address)
+        if len(recent) < self.max_failures:
+            return 0.0
+        return max(0.0, self.window_s - (self.now() - min(recent)))
 
     def _recent_failures(self, address: str) -> list[float]:
         now = self.now()
@@ -201,11 +224,35 @@ class SecurityContext:
     session_days: int
     now_s: Callable[[], int]
     throttle: LoginThrottle
+    session_generation: int = 0
+    """SEC-03 (qa-report-data-01.md): bumped by `revoke_all_sessions` on
+    every `/logout`, and mixed into `session_signing_key` -- the only
+    state that needs to change for every previously issued session
+    token to stop verifying at once. Starts at `0`; a process restart
+    already revokes every session for a different reason entirely
+    (`app_secret` itself is fresh random bytes every `bootstrap.build`
+    call, never persisted to disk), so this field only needs to cover
+    the in-process, same-restart case logout actually requires."""
 
 
 def _signing_key(security: SecurityContext) -> bytes:
     assert security.password is not None  # only ever called once a password is configured
-    return session_signing_key(security.app_secret, security.password)
+    return session_signing_key(security.app_secret, security.password, security.session_generation)
+
+
+def revoke_all_sessions(security: SecurityContext) -> SecurityContext:
+    """SEC-03: returns a new `SecurityContext` with its session
+    generation bumped, so every session token issued before this call
+    fails `verify_session_token` immediately afterward (`_signing_key`
+    changes along with it) -- the caller swaps `request.app.state.security`
+    to this returned value.
+
+    **Single-user app, documented simplification**: this revokes every
+    session for every client, not just the one that called `/logout` --
+    there is only ever one real visitor to this app, so that distinction
+    has no practical meaning, and bumping one shared generation is far
+    simpler than tracking a revocation list per session token."""
+    return replace(security, session_generation=security.session_generation + 1)
 
 
 def has_valid_session(request: Request, security: SecurityContext) -> bool:
@@ -429,6 +476,7 @@ __all__ = [
     "lan_denied_response",
     "new_csrf_secret",
     "require_csrf",
+    "revoke_all_sessions",
     "safe_next_path",
     "session_signing_key",
     "set_csrf_cookie",

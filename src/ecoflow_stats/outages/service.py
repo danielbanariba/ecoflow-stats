@@ -21,12 +21,13 @@ import hashlib
 from typing import TYPE_CHECKING, Literal
 
 from ecoflow_stats.outages import model
-from ecoflow_stats.outages.detector import detect
+from ecoflow_stats.outages.detector import build_live_state, detect
 from ecoflow_stats.outages.model import Decision, DetectorConfig, JudgedPoint
 
 if TYPE_CHECKING:
     from datetime import datetime
 
+    from ecoflow_stats.outages.detector import LiveOutageState
     from ecoflow_stats.ports import (
         DecisionStore,
         DerivationStore,
@@ -203,4 +204,50 @@ def undo_decision(decision_id: int, *, decision_store: DecisionStore) -> None:
     decision_store.undo(decision_id)
 
 
-__all__ = ["derive_outages", "record_decision", "undo_decision"]
+def build_live_outage_state(
+    device_id: int,
+    *,
+    sample_store: SampleStore,
+    derivation_store: DerivationStore,
+    config: DetectorConfig = _DEFAULT_CONFIG,
+    now: datetime,
+) -> LiveOutageState:
+    """Rebuild device `device_id`'s live `OutageMachine` by replaying
+    stored samples from its last known-good `outages` checkpoint (or
+    from the beginning, when none exists yet) through `now`, with every
+    transition discarded -- the live collector's own startup replay
+    (design D6: "rebuilt at startup by replaying from the last quiescent
+    checkpoint with notifications disabled"), so restarting mid-outage
+    never re-fires a `Started` alert for an event that already began
+    before the restart (notifications requirement: "No Duplicate
+    Notifications Across Restarts").
+
+    Deliberately simpler than `derive_outages`'s own resume logic above:
+    a stale or version-mismatched checkpoint here only costs one extra
+    full replay (cheap, and only happens once at startup), never a
+    wrong persisted row, so this never needs `derive_outages`'s own
+    needs-full-recompute reasoning about a detector version or
+    parameter change.
+    """
+    existing = derivation_store.get(device_id, _DERIVATION_NAME)
+    resume_from: JudgedPoint | None = None
+    if existing is not None and existing.checkpoint_ts is not None:
+        checkpoint_rows = list(
+            sample_store.between(device_id, existing.checkpoint_ts, existing.checkpoint_ts)
+        )
+        if checkpoint_rows:
+            checkpoint_reading = checkpoint_rows[0].reading
+            resume_from = JudgedPoint(
+                ts=existing.checkpoint_ts,
+                state="present",
+                soc=checkpoint_reading.soc,
+                chg_ac_wh=checkpoint_reading.chg_ac_wh,
+                ac_in_w=checkpoint_reading.ac_in_w,
+            )
+    lower = (resume_from.ts + 1) if resume_from is not None else -(2**63)
+    now_ts = int(now.timestamp())
+    samples = [(row.ts, row.reading) for row in sample_store.between(device_id, lower, now_ts)]
+    return build_live_state(samples, config=config, resume_from=resume_from)
+
+
+__all__ = ["build_live_outage_state", "derive_outages", "record_decision", "undo_decision"]

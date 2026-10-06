@@ -20,7 +20,7 @@ from ecoflow_stats.devices.reading import Reading
 from ecoflow_stats.outages import model
 from ecoflow_stats.outages.detector import detect
 from ecoflow_stats.outages.model import DetectorConfig
-from ecoflow_stats.outages.service import derive_outages
+from ecoflow_stats.outages.service import build_live_outage_state, derive_outages
 from ecoflow_stats.storage.database import Database
 from ecoflow_stats.storage.derivations import DerivationStore
 from ecoflow_stats.storage.devices import DeviceStore
@@ -257,3 +257,72 @@ def test_the_full_flag_forces_a_recompute_even_when_clean(env: _Env) -> None:
     assert ran is True
     computed_at_after = env.derivation_store.get(env.device_id, "outages").computed_at  # type: ignore[union-attr]
     assert computed_at_after != computed_at_first
+
+
+def test_build_live_outage_state_with_no_prior_derivation_replays_from_the_beginning(
+    env: _Env,
+) -> None:
+    """Pass-1: skipping replay entirely when no derivation has ever run
+    (for example, straight after a fresh import, before the first
+    5-minute derive tick) would leave the live collector's own state
+    stuck at "unknown" even though stored samples already show an
+    ongoing outage -- the very next live reading would misreport
+    `start_in_gap`/`start_uncertainty_s` on its alert."""
+    env.insert([(0, _reading(120.0, 80)), (60, _reading(0.0, 79))])
+
+    state = build_live_outage_state(
+        env.device_id,
+        sample_store=env.sample_store,
+        derivation_store=env.derivation_store,
+        config=_CONFIG,
+        now=_NOW,
+    )
+
+    assert state.machine.mode == "absent"
+    assert state.machine.event is not None
+    assert state.machine.event.start_ts == 60
+
+
+class _SpySampleStore:
+    """Wraps a real `SampleStore`, recording every `between()` range
+    asked for -- the state machine converges to the same final answer
+    whether it replays the full history or only the tail after a
+    checkpoint, so the query range itself is the only observable proof
+    the checkpoint was actually consulted rather than silently ignored.
+    """
+
+    def __init__(self, inner: SampleStore) -> None:
+        self._inner = inner
+        self.between_calls: list[tuple[int, int]] = []
+
+    def add(self, device_id: int, ts: int, origin: int, reading: Reading) -> bool:
+        return self._inner.add(device_id, ts, origin, reading)
+
+    def latest(self, device_id: int) -> object:
+        return self._inner.latest(device_id)
+
+    def between(self, device_id: int, start: int, end: int) -> object:
+        self.between_calls.append((start, end))
+        return self._inner.between(device_id, start, end)
+
+
+def test_build_live_outage_state_queries_samples_only_after_the_checkpoint(env: _Env) -> None:
+    """Pass-1: querying the full sample history on every collector
+    restart instead of narrowing to the stored checkpoint would make
+    startup replay scale with the entire database's lifetime instead of
+    with "since the last clean checkpoint" -- the incremental-replay
+    design (design-data section 4.3) this helper exists to provide."""
+    env.insert(_present_and_outage_samples())  # ends present at ts=300, a clean checkpoint
+    assert env.derive() is True
+    env.insert([(360, _reading(0.0, 80))])
+    spy = _SpySampleStore(env.sample_store)
+
+    build_live_outage_state(
+        env.device_id,
+        sample_store=spy,  # type: ignore[arg-type]
+        derivation_store=env.derivation_store,
+        config=_CONFIG,
+        now=_NOW,
+    )
+
+    assert spy.between_calls[-1][0] == 301  # strictly after the ts=300 checkpoint

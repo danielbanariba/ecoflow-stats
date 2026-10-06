@@ -1,0 +1,17 @@
+{
+  "app.name": "ecoflow-stats",
+  "nav.label": "Primary navigation",
+  "nav.overview": "Overview",
+  "common.skip_to_content": "Skip to content",
+  "common.unavailable": "Unavailable",
+  "device.selector.label": "Device",
+  "device.selector.submit": "View",
+  "live.grid.present": "Grid power is present",
+  "live.grid.absent": "Grid power is out",
+  "live.grid.unknown": "Grid status unknown",
+  "live.soc.label": "Battery charge",
+  "live.data_age": "Data age: {seconds}s",
+  "live.stale": "Stale — not current",
+  "live.empty_state.title": "No data yet",
+  "live.empty_state.body": "This device has not reported a reading yet. Check back after its next scheduled poll."
+}

@@ -1,0 +1,17 @@
+{
+  "app.name": "ecoflow-stats",
+  "nav.label": "Navegación principal",
+  "nav.overview": "Resumen",
+  "common.skip_to_content": "Saltar al contenido",
+  "common.unavailable": "No disponible",
+  "device.selector.label": "Dispositivo",
+  "device.selector.submit": "Ver",
+  "live.grid.present": "Hay energía de la red",
+  "live.grid.absent": "No hay energía de la red",
+  "live.grid.unknown": "Estado de la red desconocido",
+  "live.soc.label": "Carga de la batería",
+  "live.data_age": "Antigüedad del dato: {seconds} s",
+  "live.stale": "Desactualizado: no es el dato actual",
+  "live.empty_state.title": "Todavía no hay datos",
+  "live.empty_state.body": "Este dispositivo todavía no reportó ninguna lectura. Volvé a revisar después del próximo sondeo programado."
+}

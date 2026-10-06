@@ -25,14 +25,17 @@ from ecoflow_stats.battery.stats import (
     charge_history,
     depth_of_discharge,
 )
+from ecoflow_stats.grid.quality import grid_quality_range
 from ecoflow_stats.live_status.service import get_status
 from ecoflow_stats.outages.aggregates import compute_aggregates
 from ecoflow_stats.outages.resolve import resolve, unresolved_gaps
 from ecoflow_stats.storage.rollups import RollupStore
+from ecoflow_stats.timeutil import local_day
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from ecoflow_stats.devices.reading import Reading
     from ecoflow_stats.outages.aggregates import OutageAggregates
     from ecoflow_stats.outages.model import DetectorConfig, Gap
     from ecoflow_stats.outages.resolve import EffectiveOutage, EffectiveView
@@ -47,10 +50,16 @@ _MAINS_STRIP_SCHEMA = "ecoflow-stats.mains-strip/v1"
 _BATTERY_SERIES_SCHEMA = "ecoflow-stats.battery-series/v1"
 _BATTERY_TRENDS_SCHEMA = "ecoflow-stats.battery-trends/v1"
 _BATTERY_OUTAGES_SCHEMA = "ecoflow-stats.battery-outages/v1"
+_GRID_SERIES_SCHEMA = "ecoflow-stats.grid-series/v1"
+_GRID_DAILY_SCHEMA = "ecoflow-stats.grid-daily/v1"
 _DEFAULT_RANGE_S = 7 * 24 * 60 * 60
 """The range query defaults to the trailing 7 days when `from`/`to` are
 omitted -- a sensible default for a dashboard call, not a domain rule."""
 _PRESENT, _ABSENT, _UNKNOWN = "present", "absent", "unknown"
+
+_GRID_BUCKET_TIERS: tuple[tuple[int | None, int], ...] = ((7, 300), (90, 3_600), (None, 86_400))
+"""`grid/series`'s chart-resolution tiers (task 20.3): 5 min for a
+range of 7 days or less, 1 h for up to 90 days, 1 day beyond that."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +99,23 @@ def _resolve_range(ctx: ApiContext, start: int | None, end: int | None) -> tuple
     range_end = end if end is not None else int(ctx.now().timestamp())
     range_start = start if start is not None else range_end - _DEFAULT_RANGE_S
     return range_start, range_end
+
+
+def _select_bucket(
+    range_start: int, range_end: int, tiers: Sequence[tuple[int | None, int]]
+) -> int:
+    """Pick the coarsest tier whose day-span threshold still covers
+    ``[range_start, range_end)``'s length -- the one reusable rule
+    `grid/series`'s chart resolution applies (task 20.5's dedup
+    concern: a single shared decision, not an independently maintained
+    copy per route). ``tiers`` is ordered ``(max_days, value)``;
+    ``max_days=None`` is the open-ended "beyond every prior threshold"
+    tier and must be last."""
+    span_days = (range_end - range_start) / 86_400
+    for max_days, value in tiers:
+        if max_days is None or span_days <= max_days:
+            return value
+    return tiers[-1][1]
 
 
 def _utc_day_str(ts: int) -> str:
@@ -482,12 +508,98 @@ def battery_outages_route(
     return JSONResponse(body)
 
 
+@router.get("/api/v1/grid/series")
+def grid_series_route(
+    request: Request,
+    device: int | None = None,
+    start: int | None = Query(None, alias="from"),
+    end: int | None = Query(None, alias="to"),
+) -> JSONResponse:
+    """grid-quality requirement "Grid Voltage and Frequency History":
+    the chart's bucketed data source, bucketed at 5 min, 1 h, or 1 day
+    depending on the requested range's length (task 20.3), computed
+    fresh from raw samples rather than from the persisted daily
+    rollups -- `grid/daily` below serves those."""
+    ctx: ApiContext = request.app.state.api
+    device_id = _resolve_device_id(ctx, device)
+    range_start, range_end = _resolve_range(ctx, start, end)
+    bucket_width_s = _select_bucket(range_start, range_end, _GRID_BUCKET_TIERS)
+    buckets: dict[int, list[tuple[int, Reading]]] = {}
+    for row in ctx.sample_store.between(device_id, range_start, range_end):
+        bucket_start = range_start + ((row.ts - range_start) // bucket_width_s) * bucket_width_s
+        buckets.setdefault(bucket_start, []).append((row.ts, row.reading))
+    points = []
+    for bucket_start in sorted(buckets):
+        quality = grid_quality_range(buckets[bucket_start])
+        if quality == "unavailable":
+            continue
+        points.append(
+            {
+                "ts": bucket_start,
+                "grid_v_min": quality.grid_v_min,
+                "grid_v_avg": quality.grid_v_avg,
+                "grid_v_max": quality.grid_v_max,
+                "grid_hz_min": quality.grid_hz_min,
+                "grid_hz_avg": quality.grid_hz_avg,
+                "grid_hz_max": quality.grid_hz_max,
+            }
+        )
+    body = {
+        "schema": _GRID_SERIES_SCHEMA,
+        "device_id": device_id,
+        "range": {"start": range_start, "end": range_end},
+        "bucket_width_s": bucket_width_s,
+        "points": points,
+    }
+    return JSONResponse(body)
+
+
+@router.get("/api/v1/grid/daily")
+def grid_daily_route(
+    request: Request,
+    device: int | None = None,
+    start: int | None = Query(None, alias="from"),
+    end: int | None = Query(None, alias="to"),
+) -> JSONResponse:
+    """grid-quality requirement "Daily Voltage and Frequency Ranges":
+    the persisted per-day min/avg/max rows `rollups.service.
+    derive_rollups` already wrote via `RollupStore.upsert_grid` (task
+    20.2's rollup half)."""
+    ctx: ApiContext = request.app.state.api
+    device_id = _resolve_device_id(ctx, device)
+    range_start, range_end = _resolve_range(ctx, start, end)
+    rows = _rollup_store(request).grid_between(
+        device_id, local_day(range_start, ctx.tz), local_day(range_end, ctx.tz)
+    )
+    body = {
+        "schema": _GRID_DAILY_SCHEMA,
+        "device_id": device_id,
+        "range": {"start": range_start, "end": range_end},
+        "days": [
+            {
+                "day": row.day,
+                "grid_v_min": row.grid_v_min,
+                "grid_v_avg": row.grid_v_avg,
+                "grid_v_max": row.grid_v_max,
+                "grid_hz_min": row.grid_hz_min,
+                "grid_hz_avg": row.grid_hz_avg,
+                "grid_hz_max": row.grid_hz_max,
+                "readings": row.grid_readings,
+            }
+            for row in rows
+        ],
+    }
+    return JSONResponse(body)
+
+
 __all__ = [
     "ApiContext",
     "battery_outages_route",
     "battery_series_route",
     "battery_trends_route",
     "gaps_route",
+    "grid_daily_route",
+    "grid_series_route",
     "mains_strip_route",
     "outages_heatmap_route",
     "outages_route",

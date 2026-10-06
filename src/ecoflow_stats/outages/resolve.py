@@ -268,4 +268,33 @@ def unresolved_gaps(
     ]
 
 
-__all__ = ["EffectiveOutage", "EffectiveView", "LegacyStatus", "resolve", "unresolved_gaps"]
+def decided_gaps(
+    gaps: Sequence[Gap], decisions: Sequence[Decision], range_end: int
+) -> list[tuple[Gap, Decision]]:
+    """Every gap WITH an active decision overlapping it by at least
+    `_MIN_OVERLAP_RATIO`, paired with that decision -- the exact
+    inverse of `unresolved_gaps` above (UI-12, qa-report-ui-01.md: a
+    decided gap used to disappear from the review list the moment it
+    was decided, making its own undo unreachable after a reload --
+    the list's caller only ever fetched `unresolved_gaps`, never a
+    decided gap's own decision). Reuses `_best_decision` rather than
+    duplicating its overlap-matching rule, exactly like
+    `unresolved_gaps` already does."""
+    paired: list[tuple[Gap, Decision]] = []
+    for gap in gaps:
+        decision = _best_decision(
+            decisions, "gap", gap.start_ts, _closed_end(gap.end_ts, range_end)
+        )
+        if decision is not None:
+            paired.append((gap, decision))
+    return paired
+
+
+__all__ = [
+    "EffectiveOutage",
+    "EffectiveView",
+    "LegacyStatus",
+    "decided_gaps",
+    "resolve",
+    "unresolved_gaps",
+]

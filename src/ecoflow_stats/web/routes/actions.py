@@ -26,7 +26,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from ecoflow_stats.outages.resolve import unresolved_gaps
+from ecoflow_stats.outages.resolve import decided_gaps, unresolved_gaps
 from ecoflow_stats.outages.service import record_decision, undo_decision
 from ecoflow_stats.storage.legacy import LegacyStore
 from ecoflow_stats.web.deps import LANG_COOKIE, negotiate_request_lang
@@ -167,10 +167,18 @@ def gap_review_list(
 ) -> HTMLResponse:
     """web-ui "Gap and Phantom Review Flow" (scenario "A gap can be
     reviewed and resolved"): the HTMX fragment `outages.html`'s
-    gap-review section expands into, listing every still-unresolved gap
-    with the before/after evidence `outages.evidence.make_gap` already
-    computed in Phase 11 -- reused via `resolve.unresolved_gaps`, never
-    recomputed."""
+    gap-review section expands into, listing every gap in range with
+    the before/after evidence `outages.evidence.make_gap` already
+    computed in Phase 11 -- reused via `resolve.unresolved_gaps`/
+    `resolve.decided_gaps`, never recomputed.
+
+    Lists a still-unresolved gap's confirm/reject forms AND a decided
+    gap's recorded verdict with its own undo form (UI-12, qa-report-
+    ui-01.md: a decided gap used to disappear from this very list the
+    moment it was decided -- the route only ever fetched
+    `unresolved_gaps` -- making its undo unreachable after a reload,
+    since the undo form itself lives in this list's own rendered row,
+    not anywhere else)."""
     ctx: ApiContext = request.app.state.api
     device_id = _resolve_device_id(ctx.device_records, device)
     range_end = end if end is not None else int(ctx.now().timestamp())
@@ -178,18 +186,30 @@ def gap_review_list(
     gaps = ctx.outage_store.gaps(device_id, range_start, range_end)
     decisions = ctx.decision_store.active(device_id) if ctx.decision_store is not None else []
     pending = unresolved_gaps(gaps, decisions, range_end)
+    decided = decided_gaps(gaps, decisions, range_end)
     t = _translator_for(request)
     cookie_value, token, is_new = _csrf_context(request)
-    if not pending:
+    if not pending and not decided:
         response = HTMLResponse(f"<p>{t('outages.gap_review.empty')}</p>")
     else:
-        body = "".join(
+        pending_rows = (
             _render_gap_row(
                 gap=gap, device_id=device_id, tz=ctx.tz, t=t, decision=None, csrf_token=token
             )
             for gap in pending
         )
-        response = HTMLResponse(body)
+        decided_rows = (
+            _render_gap_row(
+                gap=gap,
+                device_id=device_id,
+                tz=ctx.tz,
+                t=t,
+                decision={"id": decision.id, "verdict": decision.verdict},
+                csrf_token=token,
+            )
+            for gap, decision in decided
+        )
+        response = HTMLResponse("".join(pending_rows) + "".join(decided_rows))
     _set_csrf_cookie_if_new(request, response, cookie_value, is_new)
     return response
 

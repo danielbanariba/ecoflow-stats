@@ -65,7 +65,7 @@
   "outages.gap_review.expand_label": "Revisar vacíos",
   "outages.gap_review.empty": "No hay vacíos pendientes de revisión en este rango.",
   "outages.gap_review.evidence.cause": "Causa",
-  "outages.gap_review.evidence.cause_value": "Causa: {cause}",
+  "outages.gap_review.evidence.cause_value": "{cause}",
   "outages.gap_review.evidence.state_before": "Estado de la red antes",
   "outages.gap_review.evidence.state_after": "Estado de la red después",
   "outages.gap_review.evidence.soc_before": "Carga antes",

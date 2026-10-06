@@ -65,7 +65,7 @@
   "outages.gap_review.expand_label": "Review gaps",
   "outages.gap_review.empty": "No gaps need review in this range.",
   "outages.gap_review.evidence.cause": "Cause",
-  "outages.gap_review.evidence.cause_value": "Cause: {cause}",
+  "outages.gap_review.evidence.cause_value": "{cause}",
   "outages.gap_review.evidence.state_before": "Grid state before",
   "outages.gap_review.evidence.state_after": "Grid state after",
   "outages.gap_review.evidence.soc_before": "Charge before",

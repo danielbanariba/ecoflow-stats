@@ -130,14 +130,26 @@ def _seed_legacy_phantom(application: bootstrap.Application, device_id: int, sta
     )
 
 
-def test_opening_the_gap_review_list_shows_only_unresolved_gaps_evidence(
+def test_opening_the_gap_review_list_shows_unresolved_and_decided_gaps_with_their_evidence(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Scenario "A gap can be reviewed and resolved" (the listing half):
     Pass-1, a route listing every gap regardless of decision would
-    re-surface an already-reviewed gap in the review list forever, and
-    one that recomputed evidence instead of reusing `make_gap`'s stored
-    fields could silently disagree with what was actually detected."""
+    re-surface an already-reviewed gap's confirm/reject forms forever,
+    and one that recomputed evidence instead of reusing `make_gap`'s
+    stored fields could silently disagree with what was actually
+    detected.
+
+    Also proves UI-12 (qa-report-ui-01.md): a decided gap used to
+    disappear from this list entirely the moment it was decided --
+    this fetches the list fresh (no state carried from deciding it)
+    and still finds the decided gap's row, its recorded verdict text,
+    and its own undo form naming the real decision id.
+
+    Also proves UI-16 (qa-report-ui-01.md: the "Cause" label was shown
+    twice -- once as the `<dt>`, again inside the `<dd>`'s own value,
+    e.g. "Cause" / "Cause: unknown"): the `<dd>` must show only the
+    cause itself."""
     unresolved_start = _RANGE_START + 1_000
     decided_start = _RANGE_START + 5_000
     application, device_id, client = _client(
@@ -149,7 +161,7 @@ def test_opening_the_gap_review_list_shows_only_unresolved_gaps_evidence(
         ],
     )
     decision_store = DecisionStore(application.database.writer)
-    decision_store.add(
+    decision_id = decision_store.add(
         Decision(
             device_id=device_id,
             target="gap",
@@ -166,10 +178,66 @@ def test_opening_the_gap_review_list_shows_only_unresolved_gaps_evidence(
         assert response.status_code == 200
         html = response.text
         assert f'data-gap-start="{unresolved_start}"' in html
-        assert f'data-gap-start="{decided_start}"' not in html
         assert "Charge before" in html and "90" in html
         assert "Confirm as outage" in html
         assert "Reject (not an outage)" in html
+
+        assert "Cause: unknown" not in html
+        assert re.search(r"<dt>Cause</dt>\s*<dd>unknown</dd>", html) is not None
+
+        assert f'data-gap-start="{decided_start}"' in html
+        assert "Confirmed as an outage" in html
+        assert f"/decisions/{decision_id}/undo" in html
+    finally:
+        application.database.close()
+
+
+def test_a_decided_gaps_undo_is_reachable_from_the_review_list_after_a_reload(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UI-12 (qa-report-ui-01.md): "a decided gap disappears from the
+    review list, making its undo unreachable after a reload". This
+    decides a gap, then -- deliberately never reusing that response --
+    opens a brand new GET of the list (what a page reload actually
+    does), extracts the undo form's decision id purely from THAT fresh
+    HTML, and proves posting to it actually works: the gap goes back to
+    showing its confirm/reject forms, exactly like `test_undo_reverts_
+    a_gap_decision_to_its_prior_unresolved_state` already proves for an
+    undo performed without a reload in between."""
+    gap_start = _RANGE_START + 10_000
+    application, device_id, client = _client(
+        monkeypatch, tmp_path, gaps=[_gap(gap_start, gap_start + 90)]
+    )
+    try:
+        with client:
+            headers = _csrf_headers(client, application)
+            client.post(
+                f"/outages/gaps/{gap_start}/decision",
+                data={"device": device_id, "verdict": "outage"},
+                headers=headers,
+            )
+
+            reload_response = client.get(f"/outages/gaps?device={device_id}")
+            reload_html = reload_response.text
+            match = re.search(r"/decisions/(\d+)/undo", reload_html)
+            assert match is not None, "no undo form for the decided gap after reload"
+            decision_id = int(match.group(1))
+
+            undo_response = client.post(
+                f"/decisions/{decision_id}/undo",
+                data={
+                    "device": device_id,
+                    "target": "gap",
+                    "start": gap_start,
+                    "csrf_token": headers["x-csrf-token"],
+                },
+                headers=headers,
+            )
+
+        assert undo_response.status_code == 200
+        assert "Confirm as outage" in undo_response.text
+        assert "Reject (not an outage)" in undo_response.text
+        assert DecisionStore(application.database.writer).active(device_id) == []
     finally:
         application.database.close()
 

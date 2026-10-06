@@ -269,3 +269,66 @@ main {
   font-size: 1.25rem;
   color: var(--ink);
 }
+
+/* Outages page (design part 3, section 4 "ECharts" / "Visual
+   language"): the chart figure, its accessibility-floor fallback
+   table, and the summary/events layout every later chart-bearing page
+   (battery, energy, grid) reuses via `_macros.html`'s
+   `chart_with_fallback`. */
+
+.outages-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--space-3);
+  margin: 0 0 var(--space-4);
+}
+
+.outages-summary__item dt {
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+}
+
+.outages-summary__item dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.chart-figure {
+  margin: 0 0 var(--space-4);
+}
+
+.chart {
+  width: 100%;
+  min-height: 220px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.chart-fallback summary {
+  cursor: pointer;
+  padding: var(--space-2) 0;
+  color: var(--mains);
+  font-weight: 600;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: var(--space-3);
+}
+
+th,
+td {
+  text-align: left;
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.badge--uncertain {
+  background: var(--unknown);
+  color: var(--surface-raised);
+  margin-right: var(--space-1);
+}

@@ -10,11 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from ecoflow_stats.live_status.service import get_status
+from ecoflow_stats.outages.aggregates import compute_aggregates
+from ecoflow_stats.outages.resolve import resolve, unresolved_gaps
 from ecoflow_stats.web.deps import (
     DEVICE_COOKIE,
     LANG_COOKIE,
@@ -34,7 +36,11 @@ from ecoflow_stats.web.security import (
     set_csrf_cookie,
     verify_password,
 )
-from ecoflow_stats.web.views import build_overview_view_model
+from ecoflow_stats.web.views import (
+    build_outages_view_model,
+    build_overview_view_model,
+    format_local_dt,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -46,8 +52,14 @@ if TYPE_CHECKING:
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 TEMPLATES = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+TEMPLATES.env.globals["format_local_dt"] = format_local_dt
 _CATALOGS = load_catalogs()
 _COOKIE_MAX_AGE_S = 365 * 24 * 60 * 60
+_OUTAGES_DEFAULT_RANGE_S = 7 * 24 * 60 * 60
+"""Trailing-7-days default when `from`/`to` are omitted -- a dashboard-
+sensible default, not a domain rule (matches `web.routes.api`'s own
+`_DEFAULT_RANGE_S`, duplicated here since that module is outside this
+slice's declared edit surface)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +143,70 @@ def live_partial(request: Request, device: int | None = None) -> HTMLResponse:
     return TEMPLATES.TemplateResponse(
         request, "partials/live.html", {"t": translator(lang, _CATALOGS), "view": view}
     )
+
+
+@router.get("/outages", response_class=HTMLResponse)
+def outages_page(
+    request: Request,
+    device: int | None = None,
+    start: int | None = Query(None, alias="from"),
+    end: int | None = Query(None, alias="to"),
+) -> HTMLResponse:
+    """outages page (design part 3 "Web"): summary, server-rendered
+    weekday/hour heatmap, events table, and the gap-review queue count.
+
+    Reuses the same pure reconciliation pipeline `web.routes.api`'s
+    aggregate routes already call (`resolve`, `compute_aggregates`,
+    `unresolved_gaps`) so the page and the JSON API never disagree.
+    `decision_store`/`tz` are read from `request.app.state.api` --
+    already wired to the real `DecisionStore`/configured timezone by
+    `web.app._build_api_context` -- rather than duplicating that wiring
+    onto `PagesContext`, the same cross-context read style this module
+    already uses for `request.app.state.security`."""
+    ctx: PagesContext = request.app.state.pages
+    api_ctx = request.app.state.api
+    lang = _resolve_lang(request, ctx)
+    selected_id = _resolve_device(request, ctx, device)
+
+    range_end = end if end is not None else int(ctx.now().timestamp())
+    range_start = start if start is not None else range_end - _OUTAGES_DEFAULT_RANGE_S
+
+    events = ctx.outage_store.events(selected_id, range_start, range_end)
+    gaps = ctx.outage_store.gaps(selected_id, range_start, range_end)
+    decisions = (
+        api_ctx.decision_store.active(selected_id) if api_ctx.decision_store is not None else []
+    )
+    view = resolve(detected=events, gaps=gaps, legacy=(), decisions=decisions, range_end=range_end)
+    aggregates = compute_aggregates(
+        outages=view.outages, range_start=range_start, range_end=range_end, tz=api_ctx.tz
+    )
+    pending_gaps = unresolved_gaps(gaps, decisions, range_end)
+
+    view_model = build_outages_view_model(
+        device_records=ctx.device_records,
+        selected_device_id=selected_id,
+        aggregates=aggregates,
+        outages=view.outages,
+        briefs=view.briefs,
+        gaps=gaps,
+        gap_review_count=len(pending_gaps),
+        range_start=range_start,
+        range_end=range_end,
+        mains_strip_src=f"/api/v1/mains-strip?device={selected_id}&from={range_start}&to={range_end}",
+    )
+    response = TEMPLATES.TemplateResponse(
+        request,
+        "outages.html",
+        {
+            "t": translator(lang, _CATALOGS),
+            "lang": lang,
+            "html_lang": html_lang(lang),
+            "view": view_model,
+            "tz": api_ctx.tz,
+        },
+    )
+    response.set_cookie(DEVICE_COOKIE, str(selected_id), max_age=_COOKIE_MAX_AGE_S, samesite="lax")
+    return response
 
 
 @router.post("/preferences", dependencies=[Depends(require_csrf)])

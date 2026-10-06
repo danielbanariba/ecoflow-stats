@@ -22,6 +22,7 @@ from ecoflow_stats.outages.aggregates import compute_aggregates
 from ecoflow_stats.outages.resolve import resolve, unresolved_gaps
 from ecoflow_stats.storage.rollups import RollupStore
 from ecoflow_stats.storage.state import set_session_generation
+from ecoflow_stats.timeutil import relative_time_unit
 from ecoflow_stats.web.deps import (
     DEVICE_COOKIE,
     LANG_COOKIE,
@@ -60,6 +61,7 @@ if TYPE_CHECKING:
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 TEMPLATES = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 TEMPLATES.env.globals["format_local_dt"] = format_local_dt
+TEMPLATES.env.globals["relative_time_unit"] = relative_time_unit
 _CATALOGS = load_catalogs()
 _COOKIE_MAX_AGE_S = 365 * 24 * 60 * 60
 _OUTAGES_DEFAULT_RANGE_S = 7 * 24 * 60 * 60

@@ -45,6 +45,34 @@ def day_bounds(day: str, tz: str) -> tuple[int, int]:
     return int(start.timestamp()), int(end.timestamp())
 
 
+def relative_time_unit(age_s: int) -> tuple[str, int]:
+    """Bucket a device sample's age in seconds into the coarsest
+    human-friendly unit and count for an "X ago" display (UI-01,
+    qa-report-ui-01.md: the overview showed the raw sample age in
+    seconds, e.g. ``"8090 s"``, instead of a human-readable "2 hours
+    ago").
+
+    Returns an i18n key prefix (``"time.seconds_ago"``,
+    ``"time.minutes_ago"``, ``"time.hours_ago"``, or
+    ``"time.days_ago"``) paired with its count, ready for
+    ``web.i18n.t(key, count=count)``'s existing singular/plural lookup.
+    Floors rather than rounds, so the displayed age never overstates how
+    stale the data actually is. A negative age (clock skew between the
+    collector and web processes) clamps to zero rather than rendering a
+    nonsensical negative count.
+    """
+    age_s = max(0, age_s)
+    if age_s < 60:
+        return "time.seconds_ago", age_s
+    minutes = age_s // 60
+    if minutes < 60:
+        return "time.minutes_ago", minutes
+    hours = minutes // 60
+    if hours < 24:
+        return "time.hours_ago", hours
+    return "time.days_ago", hours // 24
+
+
 def split_by_local_days(start_ts: int, end_ts: int, tz: str) -> list[tuple[str, float]]:
     """Split the half-open interval ``[start_ts, end_ts)`` into the local
     calendar days (under ``tz``) it overlaps, each paired with the
@@ -73,4 +101,4 @@ def split_by_local_days(start_ts: int, end_ts: int, tz: str) -> list[tuple[str, 
     return shares
 
 
-__all__ = ["day_bounds", "local_day", "split_by_local_days"]
+__all__ = ["day_bounds", "local_day", "relative_time_unit", "split_by_local_days"]

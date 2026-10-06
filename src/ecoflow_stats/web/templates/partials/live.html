@@ -22,7 +22,8 @@
         </h2>
       </div>
       <div class="inline-badge-row">
-        <span>{{ t('live.data_age').format(seconds=view.age_s) }}</span>
+        {% set age_unit_key, age_unit_count = relative_time_unit(view.age_s) %}
+        <span>{{ t(age_unit_key, count=age_unit_count).format(count=age_unit_count) }}</span>
         {% if view.stale %}<span class="badge badge--stale">{{ t('live.stale') }}</span>{% endif %}
       </div>
     </div>

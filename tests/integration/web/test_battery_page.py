@@ -420,6 +420,29 @@ def test_the_page_has_no_inline_executable_script(
         application.database.close()
 
 
+def test_the_page_head_eyebrow_shows_the_selected_range_not_the_heading_text(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UI-03 (qa-report-ui-01.md): the eyebrow above the "Battery"
+    heading repeated the heading's own text verbatim, adding no
+    information. A defect that reverted the eyebrow back to
+    `battery.page.title` (the same text as the `<h1>`), or dropped the
+    selected range from it, would resurface the same complaint."""
+    application, _device_id, client = _client(monkeypatch, tmp_path)
+    try:
+        with client:
+            response = client.get("/battery")
+
+        assert response.status_code == 200
+        html = response.text
+        assert '<h1 class="page-head__title">Battery</h1>' in html
+        assert 'page-head__eyebrow">Battery</p>' not in html
+        assert "2026-01-02" in html
+        assert "2026-01-09" in html
+    finally:
+        application.database.close()
+
+
 # --- API route tests ---------------------------------------------------
 
 

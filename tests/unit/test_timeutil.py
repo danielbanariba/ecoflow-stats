@@ -12,7 +12,12 @@ from datetime import UTC, datetime
 
 import pytest
 
-from ecoflow_stats.timeutil import day_bounds, local_day, split_by_local_days
+from ecoflow_stats.timeutil import (
+    day_bounds,
+    local_day,
+    relative_time_unit,
+    split_by_local_days,
+)
 
 
 def _ts(year: int, month: int, day: int, hour: int = 0, minute: int = 0, second: int = 0) -> int:
@@ -95,3 +100,34 @@ def test_split_by_local_days_attributes_a_zero_length_interval_to_one_day() -> N
     ts = _ts(2026, 1, 1, 12, 0, 0)
 
     assert split_by_local_days(ts, ts, "UTC") == [("2026-01-01", 1.0)]
+
+
+def test_relative_time_unit_buckets_seconds_to_the_matching_i18n_key_and_count() -> None:
+    """UI-01 (qa-report-ui-01.md): the overview rendered the device's raw
+    sample age in seconds (e.g. "8090 s") instead of a human relative
+    time like "2 hours ago". A defect that left the raw seconds
+    unconverted, or picked the wrong unit boundary (e.g. switching to
+    minutes only past 120 s, or to hours only past 7200 s), would
+    resurface the same complaint or silently misreport the staleness."""
+    assert relative_time_unit(45) == ("time.seconds_ago", 45)
+    assert relative_time_unit(60) == ("time.minutes_ago", 1)
+    assert relative_time_unit(125) == ("time.minutes_ago", 2)
+    assert relative_time_unit(3600) == ("time.hours_ago", 1)
+    assert relative_time_unit(8090) == ("time.hours_ago", 2)
+    assert relative_time_unit(86_400) == ("time.days_ago", 1)
+
+
+def test_relative_time_unit_floors_rather_than_rounds_up_a_partial_unit() -> None:
+    """A defect that rounded 119 elapsed minutes up to "2 hours ago"
+    (instead of flooring to "1 hour ago") would overstate how stale the
+    data actually is -- a staleness indicator must never claim data is
+    older than it is."""
+    assert relative_time_unit(119 * 60) == ("time.hours_ago", 1)
+
+
+def test_relative_time_unit_clamps_a_negative_age_to_zero() -> None:
+    """Clock skew between the collector process and the web process
+    could produce a negative age; a defect that let it through
+    unclamped would render a nonsensical negative count instead of "0 s
+    ago"."""
+    assert relative_time_unit(-5) == ("time.seconds_ago", 0)

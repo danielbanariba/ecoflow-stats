@@ -161,7 +161,38 @@ def test_a_stale_sample_shows_an_explicit_stale_indicator_with_the_data_age(
         assert response.status_code == 200
         html = response.text
         assert "Stale" in html
-        assert "9000" in html  # the reported data age
+        # UI-01 (qa-report-ui-01.md): the raw sample age in seconds must
+        # never leak into the page; 9000 s floors to a human "2 hours
+        # ago" (9000 // 60 = 150 min, 150 // 60 = 2 h).
+        assert "9000" not in html
+        assert "2 hours ago" in html
+    finally:
+        application.database.close()
+
+
+def test_the_page_head_eyebrow_shows_live_status_not_the_heading_text(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UI-03 (qa-report-ui-01.md): the eyebrow above the "Overview"
+    heading repeated the heading's own text verbatim, adding no
+    information. A defect that reverted the eyebrow back to
+    `nav.overview` (the same text as the `<h1>`) would resurface the
+    same complaint."""
+    application = _build(monkeypatch, tmp_path, devices="TESTDEV0001")
+    try:
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
+        with TestClient(app) as client:
+            response = client.get("/")
+
+        assert response.status_code == 200
+        html = response.text
+        assert '<h1 class="page-head__title">Overview</h1>' in html
+        assert 'page-head__eyebrow">Live status</p>' in html
     finally:
         application.database.close()
 

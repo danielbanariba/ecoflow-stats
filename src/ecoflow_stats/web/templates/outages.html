@@ -3,7 +3,7 @@
 {% block title %}{{ t('outages.page.title') }} · {{ t('app.name') }}{% endblock %}
 {% block content %}
 <div class="page-head reveal">
-  <p class="eyebrow page-head__eyebrow">{{ t('outages.page.title') }}</p>
+  <p class="eyebrow page-head__eyebrow">{{ t('outages.page.eyebrow').format(start=format_local_dt(view.range_start, tz)[:10], end=format_local_dt(view.range_end, tz)[:10]) }}</p>
   <h1 class="page-head__title">{{ t('outages.page.title') }}</h1>
 </div>
 

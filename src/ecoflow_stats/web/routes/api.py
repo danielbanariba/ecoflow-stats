@@ -47,7 +47,12 @@ if TYPE_CHECKING:
 
 _SCHEMA = "ecoflow-stats.status/v1"
 _OUTAGES_SCHEMA = "ecoflow-stats.outages/v1"
-_HEATMAP_SCHEMA = "ecoflow-stats.outages-heatmap/v1"
+_HEATMAP_SCHEMA = "ecoflow-stats.outages-heatmap/v2"
+"""v2 (DATA-03, qa-report-data-01.md): the body's `heatmap` field is a
+joint weekday x hour matrix, replacing v1's two independent
+`hour_of_day`/`day_of_week` marginal arrays -- a breaking shape
+change, so the schema version moves rather than silently reusing v1's
+identifier for different data."""
 _GAPS_SCHEMA = "ecoflow-stats.gaps/v1"
 _MAINS_STRIP_SCHEMA = "ecoflow-stats.mains-strip/v1"
 _BATTERY_SERIES_SCHEMA = "ecoflow-stats.battery-series/v1"
@@ -398,10 +403,12 @@ def outages_heatmap_route(
     start: int | None = Query(None, alias="from"),
     end: int | None = Query(None, alias="to"),
 ) -> JSONResponse:
-    """The weekday/hour distribution of confirmed outage start times --
-    the same `OutageAggregates` the `outages` route above computes, this
-    route just exposes its two distribution arrays instead of its
-    totals."""
+    """The joint weekday x hour distribution of confirmed outage start
+    times -- the same `OutageAggregates` the `outages` route above
+    computes, this route just exposes its matrix instead of its totals
+    (DATA-03, qa-report-data-01.md: replaces the two independent 1D
+    marginals this route used to expose, which could never show a real
+    pattern like "always on Monday afternoons")."""
     ctx: ApiContext = request.app.state.api
     device_id = _resolve_device_id(ctx, device)
     range_start, range_end = _resolve_range(ctx, start, end)
@@ -410,8 +417,7 @@ def outages_heatmap_route(
         "schema": _HEATMAP_SCHEMA,
         "device_id": device_id,
         "range": {"start": range_start, "end": range_end},
-        "hour_of_day": aggregates.hour_of_day,
-        "day_of_week": aggregates.day_of_week,
+        "heatmap": aggregates.heatmap,
     }
     return JSONResponse(body)
 

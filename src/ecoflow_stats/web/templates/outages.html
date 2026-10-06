@@ -61,42 +61,30 @@
       </div>
     </div>
     {% call macros.chart_with_fallback('heatmap-chart', 'heatmap', t('outages.heatmap.aria_label'), t('chart.fallback_label'), json_target='heatmap-data', extra_class='chart--strip') %}
-      <h3>{{ t('outages.heatmap.fallback.hour_heading') }}</h3>
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">{{ t('outages.heatmap.table.hour') }}</th>
-            <th scope="col">{{ t('outages.heatmap.table.count') }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for hour in range(24) %}
-          <tr>
-            <td>{{ hour }}</td>
-            <td>{{ view.heatmap.hour_of_day[hour] }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      <h3>{{ t('outages.heatmap.fallback.weekday_heading') }}</h3>
       <table>
         <thead>
           <tr>
             <th scope="col">{{ t('outages.heatmap.table.weekday') }}</th>
-            <th scope="col">{{ t('outages.heatmap.table.count') }}</th>
+            {% for hour in range(24) %}
+            <th scope="col">{{ hour }}</th>
+            {% endfor %}
           </tr>
         </thead>
         <tbody>
           {% for day in range(7) %}
           <tr>
-            <td>{{ t('weekday.' ~ day) }}</td>
-            <td>{{ view.heatmap.day_of_week[day] }}</td>
+            <th scope="row">{{ t('weekday.' ~ day) }}</th>
+            {% for hour in range(24) %}
+            <td>{{ view.heatmap.matrix[day][hour] }}</td>
+            {% endfor %}
           </tr>
           {% endfor %}
         </tbody>
       </table>
     {% endcall %}
-    <script type="application/json" id="heatmap-data">{{ {"hour_of_day": view.heatmap.hour_of_day, "day_of_week": view.heatmap.day_of_week} | tojson }}</script>
+    {% set weekday_labels = [] %}
+    {% for day in range(7) %}{% set _ = weekday_labels.append(t('weekday.' ~ day)) %}{% endfor %}
+    <script type="application/json" id="heatmap-data">{{ {"matrix": view.heatmap.matrix, "weekday_labels": weekday_labels} | tojson }}</script>
   </div>
 </section>
 

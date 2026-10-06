@@ -450,8 +450,7 @@ def test_build_outages_view_model_assembles_every_part_without_dropping_fields()
     assert view.selected_device_id == 7
     assert view.devices[0].id == 7
     assert view.summary.count == 1
-    assert view.heatmap.hour_of_day == tuple(aggregates.hour_of_day)
-    assert view.heatmap.day_of_week == tuple(aggregates.day_of_week)
+    assert view.heatmap.matrix == tuple(tuple(row) for row in aggregates.heatmap)
     assert view.events[0].start_ts == _RANGE_START + 50
     assert view.gap_review_count == 3
     assert view.legacy_review_count == 5

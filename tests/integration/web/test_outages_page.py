@@ -190,11 +190,14 @@ def test_the_summary_reports_unavailable_mean_and_longest_with_no_outages(
 def test_the_heatmap_is_rendered_server_side_from_the_outage_distribution(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Scenario 2: the weekday x hour heatmap is consumed server-side,
-    not client-fetched (task instruction, a deliberate deviation from
-    the design's default data-src pattern). Pass-1: a template that
-    client-fetches this instead, or embeds the wrong aggregate fields,
-    would leave an empty or wrong `heatmap-data` JSON block."""
+    """DATA-03 (qa-report-data-01.md): the weekday x hour heatmap is a
+    real joint matrix consumed server-side, not client-fetched (task
+    instruction, a deliberate deviation from the design's default
+    data-src pattern) -- never two independent marginal arrays, which
+    could never show a real pattern like "always on Monday afternoons".
+    Pass-1: a template that client-fetches this instead, embeds the
+    wrong aggregate field, or still exposes marginals would fail this
+    test's own payload-shape and cell-value checks."""
     outage_dt = datetime(2026, 1, 5, 3, 0, tzinfo=UTC)  # a Monday, 03:00 UTC
     outage_ts = int(outage_dt.timestamp())
     application, _device_id, client = _client(
@@ -210,13 +213,15 @@ def test_the_heatmap_is_rendered_server_side_from_the_outage_distribution(
         )
         assert match, "expected a server-rendered heatmap-data JSON block"
         payload = json.loads(match.group(1))
-        assert payload["hour_of_day"][outage_dt.hour] == 1
-        assert sum(payload["hour_of_day"]) == 1
-        assert payload["day_of_week"][outage_dt.weekday()] == 1
-        assert sum(payload["day_of_week"]) == 1
-        # The same numbers must also appear in the server-rendered
-        # fallback table (accessibility floor), not only the JS payload.
-        assert re.search(r"<td>3</td>\s*<td>1</td>", html)
+        matrix = payload["matrix"]
+        assert len(matrix) == 7
+        assert all(len(row) == 24 for row in matrix)
+        assert matrix[outage_dt.weekday()][outage_dt.hour] == 1
+        assert sum(sum(row) for row in matrix) == 1
+        # The same count must also appear in the server-rendered fallback
+        # table (accessibility floor) under the Monday row's 03:00 column,
+        # not only in the JS payload.
+        assert re.search(r'<th scope="row">Monday</th>(?:\s*<td>\d+</td>){3}\s*<td>1</td>', html)
     finally:
         application.database.close()
 

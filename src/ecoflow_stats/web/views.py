@@ -169,15 +169,16 @@ class OutageEventRow:
 
 @dataclass(frozen=True, slots=True)
 class HeatmapViewModel:
-    """The weekday/hour distribution rendered server-side into the page
-    (task instructions: consumed from `compute_aggregates`, not fetched
-    client-side). Both arrays are marginal distributions, not a joint
-    weekday-by-hour matrix -- `outages.aggregates.OutageAggregates` only
-    ever computed the two independently (slice 23), so a true 2D
-    cross-tabulation is not available data to render honestly."""
+    """The joint weekday x hour distribution rendered server-side into
+    the page (task instructions: consumed from `compute_aggregates`,
+    not fetched client-side). `matrix[weekday][hour]` -- Monday = index
+    0 .. Sunday = index 6, hour local 0..23 (DATA-03, qa-report-data-
+    01.md: replaces the two independent 1D marginals this view model
+    used to carry, which could never show a real pattern like "always
+    on Monday afternoons", only that outages happen on Mondays
+    sometimes and at 14:00 sometimes)."""
 
-    hour_of_day: tuple[int, ...]
-    day_of_week: tuple[int, ...]
+    matrix: tuple[tuple[int, ...], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -373,9 +374,7 @@ def build_outages_view_model(
             range_start=range_start,
             range_end=range_end,
         ),
-        heatmap=HeatmapViewModel(
-            hour_of_day=tuple(aggregates.hour_of_day), day_of_week=tuple(aggregates.day_of_week)
-        ),
+        heatmap=HeatmapViewModel(matrix=tuple(tuple(row) for row in aggregates.heatmap)),
         events=build_outage_event_rows(outages),
         gap_review_count=gap_review_count,
         legacy_review_count=legacy_review_count,

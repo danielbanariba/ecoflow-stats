@@ -196,25 +196,34 @@ def test_outages_route_counts_a_real_legacy_outage_but_excludes_an_unconfirmed_p
         db.close()
 
 
-def test_heatmap_route_returns_the_weekday_and_hour_distribution(tmp_path: Path) -> None:
-    """Pass-1: a route returning the wrong aggregate fields (or zeroed
-    arrays) would silently break the heatmap chart's only data source
-    (scenario "GET /api/v1/outages/heatmap returns the weekday x hour
-    matrix")."""
-    outage_start = datetime(2026, 1, 5, 3, 0, tzinfo=UTC)
-    outage_start_ts = int(outage_start.timestamp())
+def test_heatmap_route_returns_the_joint_weekday_by_hour_matrix(tmp_path: Path) -> None:
+    """DATA-03 (qa-report-data-01.md): Pass-1, a route still returning
+    two independent marginal arrays (or zeroed ones) would silently
+    break the real joint heatmap chart's only data source (the old
+    `hour_of_day`/`day_of_week` fields could never show a real pattern
+    like "always on Monday afternoons"). Two outages on different
+    weekday/hour combinations prove it is a true cross-tabulation, not
+    an outer product of marginals: (Monday, 3h) and (Tuesday, 20h) are
+    populated, but (Monday, 20h) and (Tuesday, 3h) -- which a fake
+    outer-product join would also populate -- stay zero."""
+    monday = datetime(2026, 1, 5, 3, 0, tzinfo=UTC)
+    tuesday = datetime(2026, 1, 6, 20, 0, tzinfo=UTC)
+    monday_ts, tuesday_ts = int(monday.timestamp()), int(tuesday.timestamp())
     client, db, device_id = _client(
-        tmp_path, events=[_event(outage_start_ts, outage_start_ts + 60)]
+        tmp_path,
+        events=[_event(monday_ts, monday_ts + 60), _event(tuesday_ts, tuesday_ts + 60)],
     )
     try:
         response = client.get("/api/v1/outages/heatmap", params=_range_query(device_id))
 
         assert response.status_code == 200
         body = response.json()
-        assert body["hour_of_day"][outage_start.hour] == 1
-        assert body["day_of_week"][outage_start.weekday()] == 1
-        assert sum(body["hour_of_day"]) == 1
-        assert sum(body["day_of_week"]) == 1
+        heatmap = body["heatmap"]
+        assert heatmap[monday.weekday()][monday.hour] == 1
+        assert heatmap[tuesday.weekday()][tuesday.hour] == 1
+        assert heatmap[monday.weekday()][tuesday.hour] == 0
+        assert heatmap[tuesday.weekday()][monday.hour] == 0
+        assert sum(sum(row) for row in heatmap) == 2
     finally:
         db.close()
 

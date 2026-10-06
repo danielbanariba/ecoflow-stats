@@ -233,23 +233,25 @@ function readChartJsonData(el) {
   }
 }
 
-// The heatmap endpoint exposes two independent marginal distributions
-// (hour-of-day, weekday), never a joint matrix — rendered here as two
-// 1-row heatmap strips, not a fabricated weekday-by-hour grid. Below
-// 600px the strips transpose (rows become columns) so labels stay
-// legible on a phone.
+// The heatmap endpoint exposes a real joint weekday x hour matrix
+// (DATA-03, qa-report-data-01.md: replaces the two independent 1D
+// marginal strips this used to render, which could never show a real
+// pattern like "always on Monday afternoons" -- only that outages
+// happen on Mondays sometimes and at 14:00 sometimes). Rendered as a
+// true 24 (hour) x 7 (weekday) grid; `weekday_labels` comes from the
+// server's own translated `weekday.N` strings, never hardcoded here.
 function initHeatmapChart(el) {
   const data = readChartJsonData(el);
-  if (!data) {
+  if (!data || !data.matrix) {
     return;
   }
-  const narrow = window.innerWidth < 600;
-  const hourCells = data.hour_of_day.map((count, hour) => [hour, 0, count]);
-  const weekdayCells = data.day_of_week.map((count, day) => [day, 1, count]);
-  let cells = hourCells.concat(weekdayCells);
-  if (narrow) {
-    cells = cells.map(([x, y, value]) => [y, x, value]);
-  }
+  const weekdayLabels = data.weekday_labels || [0, 1, 2, 3, 4, 5, 6];
+  const cells = [];
+  data.matrix.forEach((row, day) => {
+    row.forEach((count, hour) => {
+      cells.push([hour, day, count]);
+    });
+  });
   const chart = window.echarts.init(el, null, { renderer: "svg" });
   chart.setOption({
     animation: !prefersReducedMotion(),
@@ -258,27 +260,24 @@ function initHeatmapChart(el) {
     tooltip: {
       ...CHART_TOOLTIP_BASE,
       formatter: (p) => {
-        const [x, y, v] = p.data;
-        const isHour = y === 0;
-        const label = isHour ? x + ":00" : data.weekday_labels ? data.weekday_labels[x] : x;
-        return label + "\n{b|" + v + "}";
+        const [hour, day, count] = p.data;
+        return weekdayLabels[day] + " " + hour + ":00\n{b|" + count + "}";
       },
     },
-    grid: { containLabel: true, left: 8, right: 8, top: 8, bottom: narrow ? 8 : 24 },
+    grid: { containLabel: true, left: 8, right: 8, top: 8, bottom: 24 },
     xAxis: {
       type: "category",
-      data: narrow ? [0, 1] : undefined,
+      data: Array.from({ length: 24 }, (_, hour) => hour),
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: { show: false },
+      axisLabel: { interval: 2 },
       splitLine: { show: false },
     },
     yAxis: {
       type: "category",
-      data: narrow ? undefined : [0, 1],
+      data: weekdayLabels,
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: { show: false },
       splitLine: { show: false },
     },
     visualMap: {
@@ -291,7 +290,7 @@ function initHeatmapChart(el) {
       {
         type: "heatmap",
         data: cells,
-        itemStyle: { borderRadius: 6, borderColor: "rgba(0,0,0,0.5)", borderWidth: 3 },
+        itemStyle: { borderRadius: 4, borderColor: "rgba(0,0,0,0.5)", borderWidth: 1 },
         emphasis: { itemStyle: { shadowBlur: 12, shadowColor: "rgba(255,107,74,0.5)" } },
       },
     ],

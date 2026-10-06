@@ -1,6 +1,6 @@
 """Outage aggregates: count, total downtime, longest single outage, and
-the hour-of-day/day-of-week distribution of each outage's start time
--- computed from confirmed outage events only (outages requirement
+the joint weekday x hour distribution of each outage's start time --
+computed from confirmed outage events only (outages requirement
 "Outage Aggregates").
 
 Pure: takes an already-reconciled list of `resolve.EffectiveOutage`
@@ -30,9 +30,15 @@ class OutageAggregates:
     count: int
     total_downtime_s: int
     longest_s: int | None
-    hour_of_day: list[int] = field(default_factory=lambda: [0] * 24)
-    day_of_week: list[int] = field(default_factory=lambda: [0] * 7)
-    """Monday = index 0 .. Sunday = index 6, matching `datetime.weekday()`."""
+    heatmap: list[list[int]] = field(default_factory=lambda: [[0] * 24 for _ in range(7)])
+    """Joint weekday x hour outage-start distribution: `heatmap[weekday]
+    [hour]`. Weekday Monday = index 0 .. Sunday = index 6, matching
+    `datetime.weekday()`; hour is the local 0..23 hour `compute_
+    aggregates` already converts each start time into. Replaces two
+    independent 1D marginals (DATA-03, qa-report-data-01.md) that could
+    never show a real pattern like "always on Monday afternoons" --
+    only that outages happen on Mondays sometimes and at 14:00
+    sometimes, with no way to tell whether it was the same outages."""
 
 
 def compute_aggregates(
@@ -46,17 +52,16 @@ def compute_aggregates(
 
     An ongoing outage (`end_ts is None`) is clipped at `range_end`, never
     treated as having already ended; an outage entirely outside
-    `[range_start, range_end]` contributes nothing. The hour-of-day and
-    day-of-week bins use each outage's own (unclipped) start time,
-    converted to the local calendar in `tz` -- clipping only affects the
-    downtime totals, never which bucket a start time falls into.
+    `[range_start, range_end]` contributes nothing. The heatmap bins use
+    each outage's own (unclipped) start time, converted to the local
+    calendar in `tz` -- clipping only affects the downtime totals, never
+    which cell a start time falls into.
     """
     zone = ZoneInfo(tz)
     count = 0
     total = 0
     longest: int | None = None
-    hour_of_day = [0] * 24
-    day_of_week = [0] * 7
+    heatmap = [[0] * 24 for _ in range(7)]
 
     for outage in outages:
         clipped_start = max(outage.start_ts, range_start)
@@ -70,15 +75,13 @@ def compute_aggregates(
         longest = duration if longest is None else max(longest, duration)
 
         local_start = datetime.fromtimestamp(outage.start_ts, tz=UTC).astimezone(zone)
-        hour_of_day[local_start.hour] += 1
-        day_of_week[local_start.weekday()] += 1
+        heatmap[local_start.weekday()][local_start.hour] += 1
 
     return OutageAggregates(
         count=count,
         total_downtime_s=total,
         longest_s=longest,
-        hour_of_day=hour_of_day,
-        day_of_week=day_of_week,
+        heatmap=heatmap,
     )
 
 

@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from ecoflow_stats import bootstrap
 from ecoflow_stats.config import load_settings
 from ecoflow_stats.jobs import SupervisedTask, SupervisedTaskHandle
+from ecoflow_stats.web import app as web_app
 from ecoflow_stats.web.app import create_app
 from tests.fakes import FakeClock
 
@@ -68,7 +69,33 @@ def test_lifespan_starts_the_collector_on_startup_and_cancels_it_on_shutdown(
         holder["handle"] = handle
         return handle
 
-    app = create_app(application, start_collector=start_collector)
+    app = create_app(application, start_collector=start_collector, start_derive_job=_never_ticks)
+
+    with TestClient(app):
+        assert holder["handle"].alive is True
+
+    assert holder["handle"].alive is False
+    application.database.close()
+
+
+def test_lifespan_starts_the_derive_job_on_startup_and_cancels_it_on_shutdown(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Without this, the 5-minute derive job (`jobs.run_derive_forever`)
+    is fully implemented and tested in isolation but never actually runs
+    in the real server process -- a device fed only by the live collector
+    would accumulate dirty samples that nothing ever recomputes (batch
+    7's documented known gap: "jobs.run_derive_forever is also not yet
+    wired into web/app.py's lifespan")."""
+    application = _application(monkeypatch, tmp_path)
+    holder: dict[str, SupervisedTaskHandle] = {}
+
+    def start_derive_job(app: bootstrap.Application) -> SupervisedTaskHandle:
+        handle = _never_ticks(app)
+        holder["handle"] = handle
+        return handle
+
+    app = create_app(application, start_collector=_never_ticks, start_derive_job=start_derive_job)
 
     with TestClient(app):
         assert holder["handle"].alive is True
@@ -81,7 +108,7 @@ def test_healthz_is_reachable_through_the_real_app_and_reports_the_seeded_device
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     application = _application(monkeypatch, tmp_path)
-    app = create_app(application, start_collector=_never_ticks)
+    app = create_app(application, start_collector=_never_ticks, start_derive_job=_never_ticks)
 
     with TestClient(app) as client:
         response = client.get("/healthz")
@@ -90,4 +117,33 @@ def test_healthz_is_reachable_through_the_real_app_and_reports_the_seeded_device
     body = response.json()
     assert body["status"] == "starting"  # no sample collected yet
     assert [d["id"] for d in body["devices"]] == [application.device_records[0].id]
+    application.database.close()
+
+
+def test_the_default_derive_job_is_started_with_the_applications_own_devices_and_clock(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Proves the production wiring point (not just an injectable test
+    double): `create_app`'s real default must hand `run_derive_forever`
+    this exact application's device ids, database and clock -- the same
+    way `_start_collector`'s default already does for the collector."""
+    application = _application(monkeypatch, tmp_path)
+    captured: dict[str, object] = {}
+
+    async def _fake_run_derive_forever(device_ids: object, **kwargs: object) -> None:
+        captured["device_ids"] = device_ids
+        captured["database"] = kwargs["database"]
+        captured["clock"] = kwargs["clock"]
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(web_app, "run_derive_forever", _fake_run_derive_forever)
+
+    app = create_app(application, start_collector=_never_ticks)
+
+    with TestClient(app):
+        pass
+
+    assert captured["device_ids"] == tuple(r.id for r in application.device_records)
+    assert captured["database"] is application.database
+    assert captured["clock"] is application.clock
     application.database.close()

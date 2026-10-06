@@ -16,15 +16,25 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
+from ecoflow_stats.outages.model import DetectorConfig
+from ecoflow_stats.outages.service import derive_outages
+from ecoflow_stats.storage.derivations import DerivationStore
+from ecoflow_stats.storage.failures import FailureLog
+from ecoflow_stats.storage.outages import OutageStore
+from ecoflow_stats.storage.runs import RunLog
+from ecoflow_stats.storage.samples import SampleStore
+
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Sequence
 
     from ecoflow_stats.ports import Clock
+    from ecoflow_stats.storage.database import Database
 
 logger = logging.getLogger(__name__)
 
 _INITIAL_BACKOFF_S = 5.0
 _MAX_BACKOFF_S = 300.0
+_DEFAULT_DERIVE_CONFIG = DetectorConfig()
 
 
 @dataclass
@@ -98,4 +108,56 @@ class SupervisedTaskHandle:
         return not self.task.done()
 
 
-__all__ = ["SupervisedTask", "SupervisedTaskHandle"]
+async def run_derive_forever(
+    device_ids: Sequence[int],
+    *,
+    database: Database,
+    clock: Clock,
+    config: DetectorConfig = _DEFAULT_DERIVE_CONFIG,
+    interval_s: float = 300.0,
+) -> None:
+    """Recompute outages for every configured device every ``interval_s``
+    seconds (design module tree: "5-minute derive job"), forever, until
+    cancelled.
+
+    Builds its stores once, over the shared writer connection, and
+    isolates one device's recompute failure from the rest -- mirroring
+    the collector's own per-device isolation (acquisition requirement: a
+    tick failure must not stop future ticks) -- so one device's bug never
+    starves the others, or the next tick, of a recompute. Intended to run
+    under its own :class:`SupervisedTask`, which already restarts it (with
+    backoff) if this coroutine itself ever raises past the per-device
+    guard below.
+    """
+    sample_store = SampleStore(database.writer)
+    failure_log = FailureLog(database.writer)
+    run_log = RunLog(database.writer)
+    outage_store = OutageStore(database.writer)
+    derivation_store = DerivationStore(database.writer)
+    while True:
+        now = clock.now()
+        for device_id in device_ids:
+            database.writer.execute("BEGIN IMMEDIATE")
+            try:
+                derive_outages(
+                    device_id,
+                    sample_store=sample_store,
+                    failure_log=failure_log,
+                    run_log=run_log,
+                    outage_store=outage_store,
+                    derivation_store=derivation_store,
+                    config=config,
+                    now=now,
+                )
+            except asyncio.CancelledError:
+                database.writer.rollback()
+                raise
+            except Exception:
+                database.writer.rollback()
+                logger.exception("derive job failed for device id %s", device_id)
+            else:
+                database.writer.commit()
+        await clock.sleep_until(clock.now() + timedelta(seconds=interval_s))
+
+
+__all__ = ["SupervisedTask", "SupervisedTaskHandle", "run_derive_forever"]

@@ -6,10 +6,13 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
+from ecoflow_stats import jobs
 from ecoflow_stats.jobs import SupervisedTask, SupervisedTaskHandle
+from ecoflow_stats.storage.database import Database
 from tests.fakes import FakeClock
 
 
@@ -141,3 +144,89 @@ async def test_handle_reports_alive_through_a_crash_and_recovery_while_not_runni
     with pytest.raises(asyncio.CancelledError):
         await task
     assert handle.alive is False
+
+
+@pytest.mark.anyio
+async def test_run_derive_forever_calls_derive_outages_once_per_device_every_tick(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The 5-minute derive job must give every configured device its own
+    recompute attempt on every tick, in the order configured -- mirroring
+    the collector's own per-device cadence (acquisition requirement: each
+    device is collected on the configured interval)."""
+    db = Database(tmp_path / "ecoflow-stats.db")
+    calls: list[int] = []
+
+    def fake_derive_outages(device_id: int, **_kwargs: object) -> bool:
+        calls.append(device_id)
+        if len(calls) >= 4:
+            raise asyncio.CancelledError
+        return True
+
+    monkeypatch.setattr(jobs, "derive_outages", fake_derive_outages)
+    clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await jobs.run_derive_forever([10, 20], database=db, clock=clock, interval_s=300)
+    finally:
+        db.close()
+
+    assert calls == [10, 20, 10, 20]
+
+
+@pytest.mark.anyio
+async def test_run_derive_forever_isolates_one_devices_failure_from_the_rest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A recompute bug or a transient error for one device must not stop
+    the same tick's recompute for every other configured device --
+    mirroring acquisition's "Per-Tick Failure Isolation" requirement for
+    the derive job."""
+    db = Database(tmp_path / "ecoflow-stats.db")
+    calls: list[int] = []
+
+    def fake_derive_outages(device_id: int, **_kwargs: object) -> bool:
+        calls.append(device_id)
+        if device_id == 10:
+            raise RuntimeError("boom")
+        if len(calls) >= 2:
+            raise asyncio.CancelledError
+        return True
+
+    monkeypatch.setattr(jobs, "derive_outages", fake_derive_outages)
+    clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await jobs.run_derive_forever([10, 20], database=db, clock=clock, interval_s=300)
+    finally:
+        db.close()
+
+    assert calls == [10, 20]
+
+
+@pytest.mark.anyio
+async def test_run_derive_forever_sleeps_the_configured_interval_between_ticks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    db = Database(tmp_path / "ecoflow-stats.db")
+    calls: list[int] = []
+
+    def fake_derive_outages(device_id: int, **_kwargs: object) -> bool:
+        calls.append(device_id)
+        if len(calls) >= 2:
+            raise asyncio.CancelledError
+        return True
+
+    monkeypatch.setattr(jobs, "derive_outages", fake_derive_outages)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    clock = FakeClock(start)
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await jobs.run_derive_forever([1], database=db, clock=clock, interval_s=300)
+    finally:
+        db.close()
+
+    assert (clock.now() - start).total_seconds() == 300

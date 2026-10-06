@@ -1,6 +1,6 @@
-"""Integration tests for the outage-aggregate read-only API routes
+"""Integration tests for the 4 outage-aggregate read-only API routes
 (outages work unit 7a, PR i): `GET /api/v1/outages`, `outages/heatmap`,
-`gaps`. `mains-strip` lands in a later commit on this same branch.
+`gaps`, `mains-strip`.
 
 A standalone `FastAPI()` with only the api router mounted and
 `app.state.api` set directly to a hand-built `ApiContext` against real
@@ -11,6 +11,7 @@ SQLite stores -- no real collector, no real composition root. Mirrors
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -176,17 +177,59 @@ def test_gaps_route_returns_only_unresolved_gaps_with_their_evidence(
         db.close()
 
 
-def test_the_three_routes_are_get_only_with_no_side_effect(tmp_path: Path) -> None:
+def test_mains_strip_route_returns_a_run_length_series_covering_the_range(
+    tmp_path: Path,
+) -> None:
+    """Pass-1: a route that ignored the outage/gap data (e.g. always
+    returning one all-present segment) would defeat the mains strip's
+    entire purpose -- showing a real cut and real unknown time, not a
+    fabricated all-clear (scenario "GET /api/v1/mains-strip returns a
+    run-length [start, end, state] series")."""
+    outage_start = _RANGE_START + 1_000
+    outage_end = outage_start + 600
+    gap_start = _RANGE_START + 10_000
+    gap_end = gap_start + 400
+    client, db, device_id = _client(
+        tmp_path,
+        events=[_event(outage_start, outage_end)],
+        gaps=[_gap(gap_start, gap_end)],
+    )
+    try:
+        response = client.get("/api/v1/mains-strip", params=_range_query(device_id))
+
+        assert response.status_code == 200
+        body = response.json()
+        series = body["series"]
+
+        # The full range is covered with no holes or overlaps.
+        assert series[0][0] == _RANGE_START
+        assert series[-1][1] == _RANGE_END
+        for (_, end, _state), (next_start, _, _next_state) in pairwise(series):
+            assert end == next_start
+
+        absent = [seg for seg in series if seg[2] == "absent"]
+        unknown = [seg for seg in series if seg[2] == "unknown"]
+        assert absent == [[outage_start, outage_end, "absent"]]
+        assert unknown == [[gap_start, gap_end, "unknown"]]
+    finally:
+        db.close()
+
+
+def test_every_new_route_is_get_only_with_no_side_effect(tmp_path: Path) -> None:
     """Pass-1: a stray `@router.post` (or a route that mutates storage on
     a GET) would violate "every route is GET-only with no side effect" --
     a real risk here since every sibling review-action route landing in
     the next phase *is* a POST on a neighboring path (scenario "Every one
-    of these 4 routes is GET-only with no side effect"; `mains-strip`'s
-    own instance of this scenario is covered once that route lands)."""
+    of these 4 routes is GET-only with no side effect")."""
     outage_start = _RANGE_START + 1_000
     client, db, device_id = _client(tmp_path, events=[_event(outage_start, outage_start + 600)])
     try:
-        paths = ("/api/v1/outages", "/api/v1/outages/heatmap", "/api/v1/gaps")
+        paths = (
+            "/api/v1/outages",
+            "/api/v1/outages/heatmap",
+            "/api/v1/gaps",
+            "/api/v1/mains-strip",
+        )
         query = _range_query(device_id)
 
         for path in paths:
@@ -196,5 +239,13 @@ def test_the_three_routes_are_get_only_with_no_side_effect(tmp_path: Path) -> No
         before = {path: client.get(path, params=query).json() for path in paths}
         after = {path: client.get(path, params=query).json() for path in paths}
         assert before == after
+
+        events_after = outage_store_events_count(db)
+        assert events_after == 1
     finally:
         db.close()
+
+
+def outage_store_events_count(db: Database) -> int:
+    row = db.writer.execute("SELECT COUNT(*) AS n FROM outage_events").fetchone()
+    return int(row["n"])

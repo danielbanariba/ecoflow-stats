@@ -22,12 +22,12 @@ from ecoflow_stats.outages.aggregates import compute_aggregates
 from ecoflow_stats.outages.resolve import resolve, unresolved_gaps
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
     from datetime import datetime
 
     from ecoflow_stats.outages.aggregates import OutageAggregates
     from ecoflow_stats.outages.model import DetectorConfig, Gap
-    from ecoflow_stats.outages.resolve import EffectiveView
+    from ecoflow_stats.outages.resolve import EffectiveOutage, EffectiveView
     from ecoflow_stats.ports import DecisionStore, OutageStore, SampleStore
     from ecoflow_stats.storage.devices import DeviceRecord
 
@@ -35,9 +35,11 @@ _SCHEMA = "ecoflow-stats.status/v1"
 _OUTAGES_SCHEMA = "ecoflow-stats.outages/v1"
 _HEATMAP_SCHEMA = "ecoflow-stats.outages-heatmap/v1"
 _GAPS_SCHEMA = "ecoflow-stats.gaps/v1"
+_MAINS_STRIP_SCHEMA = "ecoflow-stats.mains-strip/v1"
 _DEFAULT_RANGE_S = 7 * 24 * 60 * 60
 """The range query defaults to the trailing 7 days when `from`/`to` are
 omitted -- a sensible default for a dashboard call, not a domain rule."""
+_PRESENT, _ABSENT, _UNKNOWN = "present", "absent", "unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +121,77 @@ def _serialize_gap(gap: Gap) -> dict[str, object]:
         "evidence": gap.evidence,
         "failures": dict(gap.failures),
     }
+
+
+def _clip(start: int, end: int | None, range_start: int, range_end: int) -> tuple[int, int] | None:
+    clipped_start = max(start, range_start)
+    clipped_end = min(end if end is not None else range_end, range_end)
+    if clipped_end <= clipped_start:
+        return None
+    return clipped_start, clipped_end
+
+
+def _paint(
+    segments: list[tuple[int, int, str]], start: int, end: int, state: str
+) -> list[tuple[int, int, str]]:
+    """Overwrite `[start, end)` with `state` across `segments`, splitting
+    any segment it partially overlaps. Later paints win over earlier
+    ones -- the priority order `_build_mains_strip` relies on."""
+    painted: list[tuple[int, int, str]] = []
+    for seg_start, seg_end, seg_state in segments:
+        if seg_end <= start or seg_start >= end:
+            painted.append((seg_start, seg_end, seg_state))
+            continue
+        if seg_start < start:
+            painted.append((seg_start, start, seg_state))
+        if seg_end > end:
+            painted.append((end, seg_end, seg_state))
+    painted.append((start, end, state))
+    painted.sort(key=lambda segment: segment[0])
+    return painted
+
+
+def _merge_adjacent(segments: list[tuple[int, int, str]]) -> list[tuple[int, int, str]]:
+    merged: list[tuple[int, int, str]] = []
+    for segment in segments:
+        if merged and merged[-1][1] == segment[0] and merged[-1][2] == segment[2]:
+            prev_start, _prev_end, state = merged[-1]
+            merged[-1] = (prev_start, segment[1], state)
+        else:
+            merged.append(segment)
+    return merged
+
+
+def _build_mains_strip(
+    outages: Sequence[EffectiveOutage],
+    gaps: Sequence[Gap],
+    range_start: int,
+    range_end: int,
+) -> list[tuple[int, int, str]]:
+    """Turn confirmed outages and raw gaps into one gapless present/
+    absent/unknown timeline (design "Visual language": present solid, an
+    outage a cut, unknown time hatched -- the app's "a gap is not an
+    outage by inference" rule, shown visually).
+
+    Painted in priority order, lowest first: the whole range starts
+    `present`; every raw gap paints `unknown` over it (a silent window is
+    never known to be present); every *confirmed* outage then paints
+    `absent` over both -- so a gap a user has since confirmed as a real
+    outage renders as a solid cut, not hatched, even though the same
+    window is also a `Gap` row in storage.
+    """
+    if range_end <= range_start:
+        return []
+    segments: list[tuple[int, int, str]] = [(range_start, range_end, _PRESENT)]
+    for gap in gaps:
+        clipped = _clip(gap.start_ts, gap.end_ts, range_start, range_end)
+        if clipped is not None:
+            segments = _paint(segments, clipped[0], clipped[1], _UNKNOWN)
+    for outage in outages:
+        clipped = _clip(outage.start_ts, outage.end_ts, range_start, range_end)
+        if clipped is not None:
+            segments = _paint(segments, clipped[0], clipped[1], _ABSENT)
+    return _merge_adjacent(segments)
 
 
 @router.get("/api/v1/status")
@@ -237,9 +310,34 @@ def gaps_route(
     return JSONResponse(body)
 
 
+@router.get("/api/v1/mains-strip")
+def mains_strip_route(
+    request: Request,
+    device: int | None = None,
+    start: int | None = Query(None, alias="from"),
+    end: int | None = Query(None, alias="to"),
+) -> JSONResponse:
+    """The mains strip's data source: a run-length `[start, end, state]`
+    series covering the whole requested range with no holes."""
+    ctx: ApiContext = request.app.state.api
+    device_id = _resolve_device_id(ctx, device)
+    range_start, range_end = _resolve_range(ctx, start, end)
+    view = _reconcile(ctx, device_id, range_start, range_end)
+    gaps = ctx.outage_store.gaps(device_id, range_start, range_end)
+    segments = _build_mains_strip(view.outages, gaps, range_start, range_end)
+    body = {
+        "schema": _MAINS_STRIP_SCHEMA,
+        "device_id": device_id,
+        "range": {"start": range_start, "end": range_end},
+        "series": [[seg_start, seg_end, state] for seg_start, seg_end, state in segments],
+    }
+    return JSONResponse(body)
+
+
 __all__ = [
     "ApiContext",
     "gaps_route",
+    "mains_strip_route",
     "outages_heatmap_route",
     "outages_route",
     "router",

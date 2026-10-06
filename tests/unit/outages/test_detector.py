@@ -13,7 +13,15 @@ import random
 
 from ecoflow_stats.devices.reading import Reading
 from ecoflow_stats.outages.detector import OutageMachine, detect
-from ecoflow_stats.outages.model import DetectorConfig, Ended, GapClosed, Started, judge
+from ecoflow_stats.outages.model import (
+    DetectorConfig,
+    Ended,
+    GapClosed,
+    JudgedPoint,
+    Quiescent,
+    Started,
+    judge,
+)
 from ecoflow_stats.storage.failures import FetchFailure
 from ecoflow_stats.storage.runs import AppRun
 
@@ -166,3 +174,63 @@ def test_live_feed_and_batch_detect_agree_on_a_seeded_random_sequence() -> None:
     batch_result = detect(samples, config=_CONFIG)
 
     assert batch_result.events == live_events
+
+
+def test_incremental_detect_resuming_from_a_quiescent_checkpoint_matches_a_full_recompute() -> None:
+    """Named Defect "Incremental drift": `outages.service.derive_outages`
+    resumes `detect()` from the last `Quiescent` checkpoint instead of
+    replaying the whole history. If the resume path (`OutageMachine.
+    resumed_at` or `detect`'s `resume_from` handling) ever diverged from
+    feeding the same tail of samples through a cold machine, a recompute
+    after a detector version bump or a late import would silently drift
+    from what a full rebuild produces — this proves every event and gap
+    at or after a real mid-sequence checkpoint is byte-identical either
+    way, not just that the two happen to agree by coincidence at the very
+    end of the sequence (which the live/batch test above already covers)."""
+    rng = random.Random(20261006)
+    samples: list[tuple[int, Reading]] = []
+    for i in range(300):
+        ts = i * 60
+        grid_v = rng.choice([0.0, 30.0, 120.0, 121.5])
+        # SoC ticks down every sample (never repeating) so no run of
+        # identical readings ever trips the stale-payload guard (amendment
+        # A3) at an arbitrary point -- that guard's own cold-window
+        # behavior on resume is a separate, already-documented
+        # simplification (`OutageMachine.resumed_at`), not what this test
+        # is about.
+        samples.append((ts, _reading(grid_v, soc=1 + (i % 99))))
+
+    full = detect(samples, config=_CONFIG)
+
+    # Walk the sequence by hand to recover every intermediate `Quiescent`
+    # checkpoint — `detect()` itself only exposes the very last one.
+    machine = OutageMachine(config=_CONFIG)
+    window: list[Reading] = []
+    checkpoints: list[int] = []
+    for ts, reading in samples:
+        judgment = judge(reading, window, config=_CONFIG)
+        for transition in machine.feed(ts, reading, judgment):
+            if isinstance(transition, Quiescent):
+                checkpoints.append(transition.ts)
+        if judgment.state != "unjudged":
+            window.append(reading)
+            if len(window) > _CONFIG.stale_repeat - 1:
+                window.pop(0)
+    assert len(checkpoints) > 3, "the seeded sequence must offer several real resume points"
+    checkpoint_ts = checkpoints[len(checkpoints) // 2]
+    checkpoint_reading = next(reading for ts, reading in samples if ts == checkpoint_ts)
+    resume_point = JudgedPoint(
+        ts=checkpoint_ts,
+        state="present",
+        soc=checkpoint_reading.soc,
+        chg_ac_wh=checkpoint_reading.chg_ac_wh,
+        ac_in_w=checkpoint_reading.ac_in_w,
+    )
+    tail = [(ts, reading) for ts, reading in samples if ts > checkpoint_ts]
+
+    incremental = detect(tail, config=_CONFIG, resume_from=resume_point)
+
+    expected_events = [e for e in full.events if e.start_ts >= checkpoint_ts]
+    expected_gaps = [g for g in full.gaps if g.start_ts >= checkpoint_ts]
+    assert incremental.events == expected_events
+    assert incremental.gaps == expected_gaps

@@ -65,6 +65,28 @@ class OutageMachine:
         self.pending: dict[str, int] = {}
         self._last_below_ts: int | None = None
 
+    @classmethod
+    def resumed_at(
+        cls, checkpoint: JudgedPoint, *, config: DetectorConfig = _DEFAULT_CONFIG
+    ) -> OutageMachine:
+        """Build a machine as if it had just reached `checkpoint` live:
+        the canonical `Quiescent` restart point an incremental recompute
+        (or the live collector's own startup replay) can resume from
+        without rebuilding the entire history (design-data section 4.3).
+
+        A `Quiescent` checkpoint is only ever emitted while `mode ==
+        "present"`, outside any gap and with no open event -- exactly
+        the state this constructs. The staleness-detection window itself
+        starts empty either way (matching the live driver's own replay),
+        so the first one or two samples fed after resuming have reduced
+        power to catch a stale payload that straddles the checkpoint --
+        an accepted, bounded simplification shared by both drivers.
+        """
+        machine = cls(config=config)
+        machine.mode = "present"
+        machine.last_judged = checkpoint
+        return machine
+
     def feed(
         self,
         ts: int,
@@ -169,20 +191,33 @@ def detect(
     failures: Sequence[FailureLike] = (),
     app_runs: Sequence[AppRunLike] = (),
     config: DetectorConfig = _DEFAULT_CONFIG,
+    resume_from: JudgedPoint | None = None,
 ) -> DetectionResult:
-    """Feed a whole, already-ts-ordered sample sequence through one fresh
+    """Feed a whole, already-ts-ordered sample sequence through one
     `OutageMachine` and collect the final events and gaps — the batch
     equivalent of calling `machine.feed()` once per live sample.
 
     Maintains its own sliding window of judged readings to call `judge()`
     exactly as a live caller must (`judge`'s own contract: the caller
     supplies the last `config.stale_repeat - 1` samples).
+
+    With `resume_from` given, the machine starts at that checkpoint
+    instead of cold (`OutageMachine.resumed_at`) and `samples` is expected
+    to hold only what comes strictly after it — the incremental-recompute
+    path (`outages.service.derive_outages`). This is still the one
+    `feed()` loop a fresh `detect()` call uses, so an incremental run and
+    a full run agree on every event and gap at or after the checkpoint
+    (Named Defect "Incremental drift").
     """
-    machine = OutageMachine(config=config)
+    machine = (
+        OutageMachine.resumed_at(resume_from, config=config)
+        if resume_from is not None
+        else OutageMachine(config=config)
+    )
     window: list[Reading] = []
     events: list[Event] = []
     gaps: list[Gap] = []
-    checkpoint_ts: int | None = None
+    checkpoint_ts: int | None = resume_from.ts if resume_from is not None else None
     for ts, reading in samples:
         judgment = judge(reading, window, config=config)
         transitions = machine.feed(ts, reading, judgment, failures=failures, app_runs=app_runs)

@@ -12,7 +12,7 @@ from __future__ import annotations
 import random
 
 from ecoflow_stats.devices.reading import Reading
-from ecoflow_stats.outages.detector import OutageMachine, detect
+from ecoflow_stats.outages.detector import LiveOutageState, OutageMachine, build_live_state, detect
 from ecoflow_stats.outages.model import (
     DetectorConfig,
     Ended,
@@ -234,3 +234,90 @@ def test_incremental_detect_resuming_from_a_quiescent_checkpoint_matches_a_full_
     expected_gaps = [g for g in full.gaps if g.start_ts >= checkpoint_ts]
     assert incremental.events == expected_events
     assert incremental.gaps == expected_gaps
+
+
+def test_live_outage_state_feed_returns_a_started_transition_on_the_first_absent_reading() -> None:
+    """Pass-1: without routing through the same `judge()`/`feed()` pair
+    `detect()` uses, the live collector's per-tick judgment could
+    disagree with recomputed statistics about the exact same reading
+    (Named Defect "Live/batch disagreement")."""
+    state = LiveOutageState(machine=OutageMachine(config=_CONFIG))
+
+    first = state.feed(0, _reading(_PRESENT_V), config=_CONFIG)
+    assert not any(isinstance(t, Started) for t in first)
+    transitions = state.feed(60, _reading(_ABSENT_V), config=_CONFIG)
+
+    assert len(transitions) == 1
+    assert isinstance(transitions[0], Started)
+
+
+def test_live_outage_state_feed_advances_the_window_so_a_repeated_payload_is_caught() -> None:
+    """Pass-1: a live state that never updated its own trailing window
+    would let a cached/repeated cloud payload be judged present or
+    absent on every tick instead of unjudged (amendment A3: stale
+    payload), corrupting both live alerts and the derived statistics."""
+    state = LiveOutageState(machine=OutageMachine(config=_CONFIG))
+    repeated = _reading(_PRESENT_V, soc=60)
+
+    state.feed(0, repeated, config=_CONFIG)
+    state.feed(60, repeated, config=_CONFIG)
+    transitions = state.feed(120, repeated, config=_CONFIG)
+
+    assert transitions == []  # the third identical reading is unjudged, not a new transition
+
+
+def test_build_live_state_replays_an_ongoing_outage_without_re_emitting_started() -> None:
+    """Pass-1: starting a fresh machine after a restart (instead of
+    replaying what already happened) would treat an already-ongoing
+    outage as brand new on the very next live reading, firing a second
+    `Started` transition for the same real event -- exactly the
+    duplicate alert a restart must never cause."""
+    history = [
+        (0, _reading(_PRESENT_V, soc=80)),
+        (60, _reading(_ABSENT_V, soc=79)),
+        (120, _reading(_ABSENT_V, soc=78)),
+    ]
+
+    state = build_live_state(history, config=_CONFIG)
+    transitions = state.feed(180, _reading(_ABSENT_V, soc=77), config=_CONFIG)
+
+    assert state.machine.mode == "absent"
+    assert transitions == []  # still absent: no new Started, no Ended
+
+
+def test_build_live_state_resumed_from_a_checkpoint_agrees_with_batch_detect() -> None:
+    """Pass-1: a live replay that disagreed with `detect()` about events
+    computed from the same tail of samples would mean the collector's
+    live alerts and the recomputed statistics tell two different
+    stories about the same history (Named Defect "Incremental drift")."""
+    checkpoint = JudgedPoint(ts=0, state="present", soc=80, chg_ac_wh=0.0, ac_in_w=500.0)
+    tail = [
+        (60, _reading(_ABSENT_V, soc=79)),
+        (120, _reading(_ABSENT_V, soc=78)),
+        (180, _reading(_PRESENT_V, soc=78)),
+    ]
+
+    state = build_live_state(tail, config=_CONFIG, resume_from=checkpoint)
+    batch = detect(tail, config=_CONFIG, resume_from=checkpoint)
+
+    assert state.machine.mode == "present"
+    assert state.machine.event is None
+    assert len(batch.events) == 1
+    assert batch.events[0].kind == "outage"
+
+
+def test_build_live_state_actually_resumes_from_the_checkpoint_not_from_unknown() -> None:
+    """Pass-1: if `resume_from` were silently ignored, the first below-
+    floor sample in `tail` would be treated as starting from an unknown
+    prior state (`start_in_gap=True`, no `start_uncertainty_s`) instead
+    of a known-present checkpoint 60s earlier -- the exact distinction
+    that decides whether a live notification can trust the event's own
+    start uncertainty."""
+    checkpoint = JudgedPoint(ts=0, state="present", soc=80, chg_ac_wh=0.0, ac_in_w=500.0)
+    tail = [(60, _reading(_ABSENT_V, soc=79))]
+
+    state = build_live_state(tail, config=_CONFIG, resume_from=checkpoint)
+
+    assert state.machine.event is not None
+    assert state.machine.event.start_in_gap is False
+    assert state.machine.event.start_uncertainty_s == 60

@@ -238,4 +238,58 @@ def detect(
     return DetectionResult(events=events, gaps=gaps, checkpoint_ts=checkpoint_ts)
 
 
-__all__ = ["DetectionResult", "OutageMachine", "detect"]
+@dataclass
+class LiveOutageState:
+    """One device's live-tracking state, carried across collector ticks:
+    the `OutageMachine` instance and the sliding `judge()` window it
+    needs. `feed()` is the one call both a live collector tick and this
+    module's own startup replay (`build_live_state` below) use to judge
+    and advance a single new reading, so they can never compute the
+    judgment differently (design D6: one detector serves both live
+    alerts and recomputed statistics)."""
+
+    machine: OutageMachine
+    window: list[Reading] = field(default_factory=list)
+
+    def feed(self, ts: int, reading: Reading, *, config: DetectorConfig) -> list[Transition]:
+        """Judge `reading` against this state's trailing window, feed it
+        into the machine, and advance the window."""
+        judgment = judge(reading, self.window, config=config)
+        transitions = self.machine.feed(ts, reading, judgment)
+        if judgment.state != "unjudged":
+            self.window.append(reading)
+            excess = len(self.window) - (config.stale_repeat - 1)
+            if excess > 0:
+                del self.window[:excess]
+        return transitions
+
+
+def build_live_state(
+    samples: Sequence[tuple[int, Reading]],
+    *,
+    config: DetectorConfig = _DEFAULT_CONFIG,
+    resume_from: JudgedPoint | None = None,
+) -> LiveOutageState:
+    """Replay `samples` (already ts-ordered, strictly after `resume_from`
+    when given) through a fresh machine with every transition discarded,
+    and return the resulting live state -- the live collector's own
+    startup replay (design D6: "rebuilt at startup by replaying from the
+    last quiescent checkpoint with notifications disabled"), so
+    restarting mid-outage never re-fires a `Started` alert for an event
+    that already began before the restart (notifications requirement:
+    "No Duplicate Notifications Across Restarts"). The caller
+    (`outages.service.build_live_outage_state`) is responsible for
+    resolving `resume_from` and supplying only the samples after it.
+    """
+    machine = (
+        OutageMachine.resumed_at(resume_from, config=config)
+        if resume_from is not None
+        else OutageMachine(config=config)
+    )
+    state = LiveOutageState(machine=machine)
+    for ts, reading in samples:
+        state.feed(ts, reading, config=config)
+    return state
+
+
+__all__ = ["DetectionResult", "LiveOutageState", "OutageMachine", "build_live_state", "detect"]

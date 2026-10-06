@@ -26,8 +26,11 @@ it, exactly as `rollups` itself is not (yet) one of
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, datetime
+from datetime import datetime
+from functools import partial
 from typing import TYPE_CHECKING
+
+from ecoflow_stats.timeutil import day_bounds, local_day
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -53,27 +56,17 @@ def _params_hash() -> str:
     return hashlib.sha256(b"battery-only").hexdigest()
 
 
-def _utc_day(ts: int) -> str:
-    """UTC calendar day for ``ts``, as ``'YYYY-MM-DD'``.
-
-    A placeholder day-bucketing rule for this slice only. Design-data
-    section 4.8 buckets rollup days through a `timeutil.local_day`
-    helper that does not exist yet (Phase 18, slice 28) -- that phase
-    buckets by `ECOFLOW_STATS_TZ` via `zoneinfo` instead, including
-    proration across a DST transition, and is expected to pass its own
-    `local_day` in as `day_fn` below rather than needing this module
-    rewritten. Until then, every day boundary in this module is UTC.
-    """
-    return datetime.fromtimestamp(ts, tz=UTC).date().isoformat()
-
-
-def _utc_day_start(day: str) -> int:
-    """The UTC epoch second at which ``day`` (a ``'YYYY-MM-DD'`` string
-    produced by a ``day_fn`` such as `_utc_day`) begins -- used only to
-    widen an incremental recompute's query to the whole of its dirty
-    day, never to enumerate days that have no samples."""
-    year, month, day_of_month = (int(part) for part in day.split("-"))
-    return int(datetime(year, month, day_of_month, tzinfo=UTC).timestamp())
+def _day_start(day: str, tz: str) -> int:
+    """The UTC epoch second at which local calendar day ``day``
+    (a ``'YYYY-MM-DD'`` string produced by a ``day_fn`` such as
+    `timeutil.local_day`) begins under ``tz`` -- used only to widen an
+    incremental recompute's query to the whole of its dirty day, never
+    to enumerate days that have no samples. Delegates to
+    `timeutil.day_bounds`, which this slice (Phase 18) closed the seam
+    for: it is DST-aware (a day is 23 or 25 hours, not always exactly
+    86_400 s), where this module's previous ``_utc_day_start``
+    placeholder assumed every day was a fixed-length UTC day."""
+    return day_bounds(day, tz)[0]
 
 
 def _daily_battery_fields(
@@ -116,11 +109,17 @@ def derive_rollups(
     rollup_store: RollupStore,
     derivation_store: DerivationStore,
     now: datetime,
-    day_fn: Callable[[int], str] = _utc_day,
+    tz: str = "UTC",
+    day_fn: Callable[[int], str] | None = None,
     full: bool = False,
 ) -> bool:
     """Recompute device ``device_id``'s daily rollups -- today, this
     slice's battery-field columns only.
+
+    Days are bucketed by ``timeutil.local_day`` under ``tz`` (energy
+    requirement "Day Boundaries Use a Configurable Local Timezone")
+    unless ``day_fn`` overrides it -- the seam this module's previous
+    ``_utc_day`` placeholder (Phase 17) existed for, now closed.
 
     Starting point: no stored derivation, or a version/parameter change
     -> full recompute from the beginning of all stored samples; a dirty
@@ -140,6 +139,9 @@ def derive_rollups(
     store commits on its own (design D4), exactly like
     `outages.service.derive_outages`.
     """
+    effective_day_fn: Callable[[int], str] = (
+        day_fn if day_fn is not None else partial(local_day, tz=tz)
+    )
     params_hash = _params_hash()
     existing = derivation_store.get(device_id, _DERIVATION_NAME)
     needs_full = (
@@ -151,14 +153,14 @@ def derive_rollups(
     if not full and not needs_full:
         if existing.dirty_from_ts is None:  # type: ignore[union-attr]
             return False
-        lower = _utc_day_start(day_fn(existing.dirty_from_ts))  # type: ignore[union-attr]
+        lower = _day_start(effective_day_fn(existing.dirty_from_ts), tz)  # type: ignore[union-attr]
     else:
         lower = -(2**63)
 
     now_ts = int(now.timestamp())
     samples_by_day: dict[str, list[tuple[int, Reading]]] = {}
     for row in sample_store.between(device_id, lower, now_ts):
-        samples_by_day.setdefault(day_fn(row.ts), []).append((row.ts, row.reading))
+        samples_by_day.setdefault(effective_day_fn(row.ts), []).append((row.ts, row.reading))
 
     for day, day_samples in samples_by_day.items():
         soc_min, soc_max, cycles_last, soh_last, batt_temp_max = _daily_battery_fields(day_samples)

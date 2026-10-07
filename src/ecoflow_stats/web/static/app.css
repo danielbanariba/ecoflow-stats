@@ -568,7 +568,13 @@ section + section {
 /* ---------- Bento grid ---------- */
 .bento {
   display: grid;
-  grid-template-columns: repeat(12, 1fr);
+  /* F1 (orchestrator QA batch F): a plain `1fr` track cannot shrink
+     below its content's own intrinsic width -- the same UI2-01 defect
+     `.stat-grid` already had below, just not yet exercised here by a
+     long enough `.stat-tile__value`. `minmax(0, 1fr)` lets each track
+     shrink to its own share of the row instead of forcing the whole
+     bento (and the page) wider than the viewport. */
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: var(--space-5);
 }
 
@@ -610,6 +616,20 @@ section + section {
     grid-template-columns: repeat(2, 1fr);
   }
   .tile--span-4 {
+    grid-column: span 2;
+  }
+  /* F1 follow-up (orchestrator QA batch F): this query narrows `.bento`
+     to 2 explicit columns and remaps `.tile--span-4` to fit them, but
+     left `.tile--span-12` (the overview/battery hero tile) still
+     asking for a 12-column span. A span wider than the explicit grid
+     makes the grid auto-generate implicit columns sized by content
+     instead of the intended `1fr` split, which starves the two real
+     columns down to a sliver -- collapsing whichever stat tile lands
+     there (observed: the overview's "State of health" value clipped
+     to 0 width at 768px). Capping the hero to the same 2 columns
+     keeps every tile inside the explicit grid, matching the pattern
+     the 560px query below already uses for both classes together. */
+  .tile--span-12 {
     grid-column: span 2;
   }
   .tile--row-2 {
@@ -868,7 +888,10 @@ section + section {
   letter-spacing: -0.02em;
   color: var(--text-primary);
   line-height: 1;
-  white-space: nowrap;
+  /* F1 (orchestrator QA batch F): dropped `white-space: nowrap` --
+     paired with `.bento`'s own `minmax(0, 1fr)` fix above, a long
+     duration value now wraps at a word boundary instead of forcing
+     the bento (and the page) wider than the viewport. */
 }
 
 .stat-tile__sub {
@@ -890,38 +913,27 @@ section + section {
 }
 
 /* ---------- Summary stat grid (outages page) ---------- */
+/* F1 (orchestrator QA batch F, regression from 75a1df2): the previous
+   fixed `repeat(6, ...)` / `repeat(3, ...)` / `repeat(2, ...)` step
+   function left narrow fixed-width cards with empty track space on
+   the right whenever a page had fewer than 6 cards (energy: 5,
+   grid: 4), and squeezed a long value ("118.8 - 121.2 V", a
+   formatted period date) into a column too narrow for it, which the
+   old `nowrap` + `text-overflow: ellipsis` below then clipped instead
+   of letting it wrap.
+
+   `repeat(auto-fit, minmax(11rem, 1fr))` fits as many 11rem-minimum
+   cards per row as the container allows and stretches them to fill
+   it exactly -- never fewer-than-full-width cards with dead space,
+   never a column forced narrower than 11rem. */
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
   gap: var(--space-4);
-}
-
-/* P-01 (orchestrator QA): at ~1000px wide, 6 narrow columns forced a
-   value like "13 h 8 min" to wrap mid-word. Dropping to 3 columns
-   earlier (1100px instead of 900px) gives each card enough width
-   before that point; `white-space: nowrap` on the value itself (below)
-   is the second half of the fix, so a value that still does not fit
-   its column clips cleanly rather than wrapping.
-
-   UI2-01 (qa-report-ui-02.md): a plain `1fr` track cannot shrink
-   below its content's intrinsic width -- combined with `nowrap` on a
-   long value ("Período más económico" / "118.8 - 121.2 V"), that
-   forced the whole grid wider than its container at 375/768px and at
-   200% zoom, a horizontal-scroll regression this same P-01 fix
-   introduced. `minmax(0, 1fr)` lets each track shrink to its
-   container's own share of the width instead of to its longest
-   child's nowrap width; `.stat-grid dd`'s own `overflow`/
-   `text-overflow` below then clips/ellipsizes a value that still
-   does not fit, rather than forcing the grid to overflow. */
-@media (max-width: 1100px) {
-  .stat-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 560px) {
   .stat-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-3);
   }
 }
@@ -958,13 +970,16 @@ section + section {
   letter-spacing: -0.02em;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  /* UI2-01 (qa-report-ui-02.md): paired with `minmax(0, 1fr)` above --
-     once the track can shrink below this value's intrinsic width, an
-     overflowing value clips with an ellipsis instead of forcing the
-     grid itself wider than its container. */
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* F1 (orchestrator QA batch F): a value is never clipped or
+     ellipsized -- `auto-fit, minmax(11rem, 1fr)` above gives every
+     card a sane minimum width, and a value that still does not fit
+     wraps instead, at a normal word/space boundary (around the
+     " - "/" / " in a range, or between "N" and its unit) -- never
+     mid-word, since nothing here sets `overflow-wrap: break-word` or
+     `word-break`. Replaces the previous `nowrap` + `text-overflow:
+     ellipsis` pair, which this batch's QA caught truncating real
+     values ("118.8 - 121....", "2026-10-...") instead of just the
+     pathological case UI2-01 introduced it for. */
 }
 
 /* ---------- Chart cards ---------- */

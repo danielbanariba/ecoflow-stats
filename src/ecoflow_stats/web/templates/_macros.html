@@ -1,0 +1,104 @@
+{% macro device_selector(devices, t, action='/') %}
+<form class="device-selector" method="get" action="{{ action }}">
+  <label class="field-label" for="device-select">{{ t('device.selector.label') }}</label>
+  <div class="select-wrap">
+    <select id="device-select" name="device" class="select">
+      {% for opt in devices %}
+      <option value="{{ opt.id }}"{% if opt.selected %} selected{% endif %}>{{ opt.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit" class="btn btn--ghost">{{ t('device.selector.submit') }}</button>
+</form>
+{% endmacro %}
+
+{#
+  chart_with_fallback: the accessibility floor every chart-bearing page
+  reuses (task 15.7 REFACTOR note) -- a `[data-chart]` element carrying
+  its own `aria-label` summary, plus a server-rendered `<details>`
+  fallback table supplied by the caller block (web-ui charts have no
+  meaning to a screen reader without one; design part 3 "ECharts":
+  "every chart has an aria-label summary and a server-rendered data
+  table in a <details> block").
+
+  `src`: a `data-src` API URL for a client-fetched chart (mains-strip).
+  `json_target`: the id of a sibling `<script type="application/json">`
+  block for a server-rendered chart (heatmap) -- `app.js` reads
+  `document.getElementById(el.dataset.json)` once `window.echarts` is
+  available, never inline script execution (CSP: `script-src 'self'`).
+  `extra_class`: an optional chart height modifier (redesign01's
+  `chart--strip` for a timeline/heatmap strip; the default `.chart` is
+  320px tall, matching the design's chart-card proportions).
+  `extra_data`: an optional `{name: value}` map of additional
+  `data-name="value"` attributes (F3, orchestrator QA batch F: the
+  grid chart reads its own `data-outage-threshold-v` this way, rather
+  than every caller re-building this whole element by hand for one
+  extra attribute).
+#}
+{% macro chart_with_fallback(chart_id, kind, aria_label, fallback_label, src=none, json_target=none, extra_class='', extra_data={}) %}
+<figure class="chart-figure">
+  <div
+    id="{{ chart_id }}"
+    class="chart{% if extra_class %} {{ extra_class }}{% endif %}"
+    data-chart="{{ kind }}"
+    {% if src %}data-src="{{ src }}"{% endif %}
+    {% if json_target %}data-json="{{ json_target }}"{% endif %}
+    {% for key, value in extra_data.items() %}data-{{ key }}="{{ value }}" {% endfor %}
+    role="img"
+    aria-label="{{ aria_label }}"
+  ></div>
+  <details class="chart-fallback">
+    <summary>{{ fallback_label }}</summary>
+    <div class="fallback-body">
+      {{ caller() }}
+    </div>
+  </details>
+</figure>
+{% endmacro %}
+
+{#
+  battery_ring: the Apple Health/Fitness-style activity ring (redesign01
+  design essential "animated battery ring"), fully server-rendered so
+  the page shows the real percentage with JavaScript disabled or
+  `prefers-reduced-motion` set -- `app.js`'s `initRings` only ever
+  layers an optional "fill in on scroll" flourish on top of this exact
+  markup, it never builds the ring from scratch (unlike the mockup's
+  JS-only `ring.js`, which left the host empty without JS).
+
+  `value`: 0-100 (int or float). `ring_id`: a page-unique id for this
+  ring's gradient def (two rings on one page would otherwise collide on
+  the same `<linearGradient id="...">`). `label`: the short word shown
+  under the percentage (e.g. "charge"). `aria_label`: the accessible
+  summary for the whole ring.
+
+  Geometry is fixed (152px host, 12px stroke, 70px radius) -- the same
+  constants the mockup's `ring.js` used -- so the circumference below
+  is a precomputed constant, not a magic number: `2 * pi * 70 ≈
+  439.823`.
+#}
+{% macro battery_ring(value, ring_id, label, aria_label) %}
+{% set circumference = 439.823 %}
+{% set offset = circumference * (1 - (value / 100)) %}
+<div class="ring-wrap" data-ring-offset="{{ offset }}" role="img" aria-label="{{ aria_label }}">
+  <svg viewBox="0 0 152 152" aria-hidden="true">
+    <defs>
+      <linearGradient id="{{ ring_id }}" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#64d2ff"/>
+        <stop offset="100%" stop-color="#30d158"/>
+      </linearGradient>
+    </defs>
+    <circle class="ring-track" cx="76" cy="76" r="70" stroke-width="12"/>
+    <circle
+      class="ring-progress"
+      cx="76" cy="76" r="70" stroke-width="12"
+      stroke="url(#{{ ring_id }})"
+      stroke-dasharray="{{ circumference }}"
+      stroke-dashoffset="{{ offset }}"
+    />
+  </svg>
+  <div class="ring-center">
+    <span class="ring-center__value num">{{ value | round(0, 'common') | int }}%</span>
+    {% if label %}<span class="ring-center__label">{{ label }}</span>{% endif %}
+  </div>
+</div>
+{% endmacro %}

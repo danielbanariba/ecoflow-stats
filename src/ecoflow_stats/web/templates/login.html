@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}{{ t('login.title') }} · {{ t('app.name') }}{% endblock %}
+{% block content %}
+<div class="page-head reveal login-shell">
+  <h1 class="page-head__title">{{ t('login.title') }}</h1>
+</div>
+
+<section class="login-shell reveal" aria-label="{{ t('login.title') }}">
+  <div class="tile">
+    {% if error == "wrong_password" %}
+    <p class="login-error" role="alert">{{ t('login.error.wrong_password') }}</p>
+    {% elif error == "throttled" %}
+    <p class="login-error" role="alert">{{ t('login.error.throttled').format(seconds=retry_after_s) }}</p>
+    {% endif %}
+
+    {#
+      UI2-03 + UI-17 (qa-report-ui-02.md): `<body hx-boost="true">` in
+      base.html makes htmx intercept this form's submit as an AJAX
+      request. htmx's default `responseHandling` treats every 4xx/5xx
+      response as an error (`swap: false`) rather than swapping it in,
+      so a throttled `429` -- whose *body* already carries the specific
+      "too many failed attempts" message rendered by `login_submit` --
+      never reaches the page; only app.js's generic
+      `htmx:responseError` banner text does, hiding which of the two
+      distinct messages (UI-17) actually applies. `hx-boost="false"`
+      opts this one form back out of boosting, so the browser performs
+      a normal (non-AJAX) submit and renders whatever the server
+      returns -- 200, 303, or 429 -- exactly as sent, specific message
+      included. This is plain HTML, so CSP (no inline script/style) is
+      unaffected.
+    #}
+    <form class="login-form" method="post" action="/login" hx-boost="false">
+      <input type="hidden" name="next" value="{{ next }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div>
+        <label class="field-label" for="login-password">{{ t('login.password_label') }}</label>
+        <input id="login-password" class="text-input" type="password" name="password" required autofocus>
+      </div>
+      <button type="submit" class="btn btn--primary">{{ t('login.submit_button') }}</button>
+    </form>
+  </div>
+</section>
+{% endblock %}

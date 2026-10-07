@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="{{ html_lang }}" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {#
+    UI2-06 (qa-report-ui-02.md): htmx's own default `attributesToSettle`
+    list is `["class", "style", "width", "height"]` -- when an
+    OOB-swapped element's prior DOM node carries an inline `style`
+    attribute (for example, one of this app's own `.reveal` entrance
+    animations, which sets `el.style.transitionDelay` via CSSOM --
+    that CSSOM write *is* reflected as a real `style` attribute, even
+    though setting it that way never itself violates CSP), htmx's
+    settle step briefly re-applies that old value onto the new node
+    via `setAttribute("style", ...)`, which strict CSP (`style-src
+    'self'`, no `unsafe-inline`) blocks outright. Dropping "style"
+    here stops htmx from ever attempting that -- this app sets every
+    dynamic style through CSSOM property writes already (never a
+    literal `style` attribute), so there is nothing meaningful left
+    for htmx to settle on that attribute in the first place.
+  #}
+  <meta name="htmx-config" content='{"allowEval": false, "includeIndicatorStyles": false, "attributesToSettle": ["class", "width", "height"]}'>
+  <title>{% block title %}{{ t('app.name') }}{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/vendor/htmx.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body hx-boost="true">
+  {#
+    Nav items are a single list literal here, not one hardcoded <a> per
+    page (visual-QA batch fix01, fix 3's original defect class) -- adding
+    a page later (energy, grid) is a one-line addition to this list, not
+    a template-wide edit. `active_nav` comes from each page route's
+    template context (presentation-only, e.g. "overview"/"outages") so
+    the current page gets `aria-current="page"` and its accent underline.
+  #}
+  {% set nav_items = [
+    {"key": "overview", "href": "/", "label": t('nav.overview')},
+    {"key": "outages", "href": "/outages", "label": t('outages.page.title')},
+    {"key": "battery", "href": "/battery", "label": t('battery.page.title')},
+    {"key": "energy", "href": "/energy", "label": t('energy.page.title')},
+    {"key": "grid", "href": "/grid", "label": t('grid.page.title')},
+  ] %}
+  <div class="ambient" aria-hidden="true">
+    <div class="ambient__spot ambient__spot--1"></div>
+    <div class="ambient__spot ambient__spot--2"></div>
+    <div class="ambient__spot ambient__spot--3"></div>
+  </div>
+  <a class="skip-link" href="#main">{{ t('common.skip_to_content') }}</a>
+  {#
+    UI-15 (qa-report-ui-01.md): "a failed HTMX mutating request shows no
+    feedback". Server-rendered once per page (not created by JS, so it
+    always exists for `aria-live` to pick up) and hidden by default;
+    `app.js` only ever toggles its `hidden` property and swaps
+    `textContent` from the already-translated `data-*-message` values
+    below -- never an inline script/style (CSP-safe).
+  #}
+  <div
+    id="htmx-error-banner"
+    class="htmx-error-banner"
+    role="alert"
+    aria-live="assertive"
+    hidden
+    data-response-message="{{ t('error.htmx.response') }}"
+    data-send-message="{{ t('error.htmx.send') }}"
+  ></div>
+  <header class="glass-nav">
+    <div class="glass-nav__bar">
+      <a class="glass-nav__brand" href="/">
+        <span class="glass-nav__brand-mark" aria-hidden="true"></span>
+        {{ t('app.name') }}
+      </a>
+      <nav class="glass-nav__links" aria-label="{{ t('nav.label') }}">
+        {% for item in nav_items %}
+        <a href="{{ item.href }}"{% if (active_nav | default('')) == item.key %} aria-current="page"{% endif %}>{{ item.label }}</a>
+        {% endfor %}
+      </nav>
+      <div class="glass-nav__lang" role="group" aria-label="Language">
+        <form method="post" action="/preferences">
+          <input type="hidden" name="lang" value="en">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="glass-nav__lang-btn" {% if lang == 'en' %}aria-current="true"{% endif %}>EN</button>
+        </form>
+        <form method="post" action="/preferences">
+          <input type="hidden" name="lang" value="es">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="glass-nav__lang-btn" {% if lang == 'es' %}aria-current="true"{% endif %}>ES</button>
+        </form>
+      </div>
+      {% if show_logout %}
+      <form method="post" action="/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="glass-nav__lang-btn">{{ t('nav.logout') }}</button>
+      </form>
+      {% endif %}
+    </div>
+  </header>
+  <main id="main">
+    <div class="shell">
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+</body>
+</html>

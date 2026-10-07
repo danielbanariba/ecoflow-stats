@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}{{ t('grid.page.title') }} · {{ t('app.name') }}{% endblock %}
+{% block content %}
+<div class="page-head reveal">
+  <p class="eyebrow page-head__eyebrow">{{ t('grid.page.eyebrow').format(start=format_local_dt(view.range_start, tz)[:10], end=format_local_dt(view.range_end, tz)[:10]) }}</p>
+  <h1 class="page-head__title">{{ t('grid.page.title') }}</h1>
+</div>
+
+<section class="device-selector-section reveal" aria-label="{{ t('device.selector.label') }}">
+  {{ macros.device_selector(view.devices, t, action='/grid') }}
+</section>
+
+<section class="grid-summary-section" aria-label="{{ t('grid.summary.heading') }}">
+  <h2 class="reveal">{{ t('grid.summary.heading') }}</h2>
+  <dl class="stat-grid mt-6">
+    <div class="stat-card reveal">
+      <dt>{{ t('grid.summary.typical_v_label') }}</dt>
+      <dd>{% if view.typical_v is not none %}{{ t('grid.voltage_value').format(volts=(view.typical_v | round(1))) }}{% else %}{{ t('common.unavailable') }}{% endif %}</dd>
+    </div>
+    <div class="stat-card reveal">
+      <dt>{{ t('grid.summary.range_v_label') }}</dt>
+      <dd>
+        {% if view.lowest_v is not none and view.highest_v is not none %}
+          {{ t('grid.range_v_value').format(low=(view.lowest_v | round(1)), high=(view.highest_v | round(1))) }}
+        {% else %}
+          {{ t('common.unavailable') }}
+        {% endif %}
+      </dd>
+    </div>
+    <div class="stat-card reveal">
+      <dt>{{ t('grid.summary.frequency_label') }}</dt>
+      <dd>
+        {% if view.lowest_hz is not none and view.highest_hz is not none %}
+          {{ t('grid.range_hz_value').format(low=(view.lowest_hz | round(2)), high=(view.highest_hz | round(2))) }}
+        {% else %}
+          {{ t('common.unavailable') }}
+        {% endif %}
+      </dd>
+    </div>
+    <div class="stat-card reveal">
+      <dt>{{ t('grid.summary.days_with_data_label') }}</dt>
+      <dd>{{ t('grid.days_with_data_value').format(with_data=view.days_with_data, total=view.days_analyzed) }}</dd>
+    </div>
+  </dl>
+  <p class="reveal mt-6 text-muted">{{ t('grid.threshold_explainer').format(threshold=("%.0f"|format(view.threshold_v))) }}</p>
+</section>
+
+<section class="grid-chart-section" aria-label="{{ t('grid.chart.heading') }}">
+  <h2 class="reveal">{{ t('grid.chart.heading') }}</h2>
+  <div class="chart-card reveal mt-6">
+    <div class="chart-card__head">
+      {#
+        Data-driven insight caption: an honest voltage min-max range
+        over the real retained rows, never a fabricated pass/fail
+        "stability" verdict -- no frequency threshold is configured
+        anywhere in this app (only `outage_threshold_v`).
+      #}
+      <p class="text-muted text-caption">
+        {% if view.lowest_v is not none and view.highest_v is not none %}
+          {{ t('grid.insight.stable').format(low=(view.lowest_v | round(1)), high=(view.highest_v | round(1))) }}
+        {% else %}
+          {{ t('grid.insight.no_data') }}
+        {% endif %}
+      </p>
+      <div class="legend-row">
+        <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--present"></span>{{ t('grid.chart.legend.voltage') }}</span>
+        <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--frequency"></span>{{ t('grid.chart.legend.frequency') }}</span>
+      </div>
+    </div>
+    {% call macros.chart_with_fallback('grid-series-chart', 'grid-series', t('grid.chart.aria_label'), t('chart.fallback_label'), src=view.series_src, extra_data={'outage-threshold-v': view.threshold_v}) %}
+      {% if view.daily_rows %}
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">{{ t('grid.table.day') }}</th>
+            <th scope="col">{{ t('grid.table.voltage') }}</th>
+            <th scope="col">{{ t('grid.table.frequency') }}</th>
+            <th scope="col">{{ t('grid.table.readings') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in view.daily_rows %}
+          <tr>
+            <td>{{ row.day }}</td>
+            <td class="num">
+              {% if row.grid_v_avg is not none %}
+                {{ row.grid_v_min | round(1) }} / {{ row.grid_v_avg | round(1) }} / {{ row.grid_v_max | round(1) }} V
+              {% else %}
+                {{ t('common.unavailable') }}
+              {% endif %}
+            </td>
+            <td class="num">
+              {% if row.grid_hz_avg is not none %}
+                {{ row.grid_hz_min | round(2) }} / {{ row.grid_hz_avg | round(2) }} / {{ row.grid_hz_max | round(2) }} Hz
+              {% else %}
+                {{ t('common.unavailable') }}
+              {% endif %}
+            </td>
+            <td class="num">{{ row.readings }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p>{{ t('grid.table.empty') }}</p>
+      {% endif %}
+    {% endcall %}
+  </div>
+</section>
+
+<script src="/static/vendor/echarts.min.js" defer></script>
+{% endblock %}

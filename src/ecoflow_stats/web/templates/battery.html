@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}{{ t('battery.page.title') }} · {{ t('app.name') }}{% endblock %}
+{% block content %}
+<div class="page-head reveal">
+  <p class="eyebrow page-head__eyebrow">{{ t('battery.page.eyebrow').format(start=format_local_dt(view.range_start, tz)[:10], end=format_local_dt(view.range_end, tz)[:10]) }}</p>
+  <h1 class="page-head__title">{{ t('battery.page.title') }}</h1>
+</div>
+
+<section class="device-selector-section reveal" aria-label="{{ t('device.selector.label') }}">
+  {{ macros.device_selector(view.devices, t, action='/battery') }}
+</section>
+
+<section class="bento mt-6" aria-label="{{ t('battery.now.heading') }}">
+  <div class="tile tile--span-4 tile--row-2 reveal">
+    <p class="eyebrow">{{ t('battery.now.heading') }}</p>
+    {% if view.current_soc is not none %}
+    <div class="hero-tile__battery mt-6">
+      {{ macros.battery_ring(view.current_soc, 'battery-ring', t('live.ring_label'), t('live.ring_aria').format(percent=view.current_soc)) }}
+      {#
+        UI-02 (qa-report-ui-01.md): this used to repeat the exact same
+        charge percentage the ring already shows. See
+        `partials/live.html`'s own fix for the full rationale -- this
+        mirrors it exactly, reusing the same `battery_power` shape.
+      #}
+      <div class="hero-tile__battery-copy">
+        {% if view.battery_power is not none and view.battery_power.direction is not none %}
+        <span class="value-lg">
+          {{ t('live.battery_power.' ~ view.battery_power.direction) }}
+          {% if view.battery_power.direction != 'idle' %}
+            · {{ t('live.battery_power.net_watts').format(watts=(view.battery_power.net_w | abs | round(0, 'common') | int)) }}
+          {% endif %}
+          {% if view.battery_power.remaining_min is not none %}
+            {% if view.battery_power.direction == 'charging' %}
+              · {{ t('live.battery_power.remaining_charging').format(minutes=view.battery_power.remaining_min) }}
+            {% elif view.battery_power.direction == 'discharging' %}
+              · {{ t('live.battery_power.remaining_discharging').format(minutes=view.battery_power.remaining_min) }}
+            {% endif %}
+          {% endif %}
+        </span>
+        {% else %}
+        <span class="value-lg text-muted">{{ t('common.unavailable') }}</span>
+        {% endif %}
+      </div>
+    </div>
+    {% else %}
+    <p class="mt-6 text-muted">{{ t('common.unavailable') }}</p>
+    {% endif %}
+  </div>
+  <div class="tile tile--span-4 tile--row-2 tile--center reveal">
+    <p class="stat-tile__label">{{ t('battery.trend.table.soh') }}</p>
+    <p class="stat-tile__value stat-tile--accent-battery">{% if view.current_soh is not none %}<span class="num">{{ view.current_soh }}%</span>{% else %}{{ t('common.unavailable') }}{% endif %}</p>
+  </div>
+  <div class="tile tile--span-4 tile--row-2 tile--center reveal">
+    <p class="stat-tile__label">{{ t('battery.trend.table.cycles') }}</p>
+    <p class="stat-tile__value">{% if view.current_cycles is not none %}<span class="num">{{ view.current_cycles }}</span>{% else %}{{ t('common.unavailable') }}{% endif %}</p>
+  </div>
+</section>
+
+<section class="battery-chart-section" aria-label="{{ t('battery.chart.soc.heading') }}">
+  <h2 class="reveal">{{ t('battery.chart.soc.heading') }}</h2>
+  <div class="chart-card reveal mt-6">
+    <div class="chart-card__head">
+      <p class="text-muted text-caption">{{ t('battery.chart.soc.aria_label') }}</p>
+      <div class="legend-row">
+        <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--unknown"></span>{{ t('battery.series.table.soc') }}</span>
+      </div>
+    </div>
+    {% call macros.chart_with_fallback('battery-soc-chart', 'soc-line', t('battery.chart.soc.aria_label'), t('chart.fallback_label'), src=view.series_src) %}
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">{{ t('battery.series.table.start') }}</th>
+            <th scope="col">{{ t('battery.series.table.soc') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for point in view.charge_series %}
+          <tr>
+            <td>{{ format_local_dt(point.ts, tz) }}</td>
+            <td>{% if point.soc is not none %}{{ point.soc }}%{% else %}{{ t('common.unavailable') }}{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+  </div>
+</section>
+
+<section class="battery-dod-section" aria-label="{{ t('battery.dod.heading') }}">
+  <h2 class="reveal">{{ t('battery.dod.heading') }}</h2>
+  {% if view.dod_rows %}
+  <div class="table-scroll reveal mt-6">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">{{ t('battery.dod.table.start') }}</th>
+          <th scope="col">{{ t('battery.dod.table.end') }}</th>
+          <th scope="col">{{ t('battery.dod.table.value') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in view.dod_rows %}
+        <tr>
+          <td>{{ format_local_dt(row.start_ts, tz) }}</td>
+          <td>{% if row.end_ts is not none %}{{ format_local_dt(row.end_ts, tz) }}{% else %}{{ t('outages.table.ongoing') }}{% endif %}</td>
+          <td class="num">{% if row.depth_of_discharge is not none %}{{ t('battery.dod.value').format(points=row.depth_of_discharge) }}{% else %}{{ t('common.unavailable') }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="reveal mt-6 text-muted">{{ t('battery.dod.empty') }}</p>
+  {% endif %}
+</section>
+
+<section class="battery-trend-section" aria-label="{{ t('battery.trend.heading') }}">
+  <h2 class="reveal">{{ t('battery.trend.heading') }}</h2>
+  <div class="chart-card reveal mt-6">
+    <div class="chart-card__head">
+      {#
+        Design critique (qa-report-ui-01.md): the trend chart had no
+        insight caption at all, just a static aria-label repeating the
+        chart's own purpose. The visible caption now reports the
+        retained history's own first-to-last change
+        (`battery.stats.summarize_battery_trend`) instead -- the
+        `aria-label` passed to `chart_with_fallback` below stays the
+        descriptive `battery.trend.aria_label` text, unchanged.
+      #}
+      <p class="text-muted text-caption">
+        {% if view.trend_insight.soh_direction is none %}
+          {{ t('battery.trend.insight.unavailable') }}
+        {% else %}
+          {{ t('battery.trend.insight.soh_' ~ view.trend_insight.soh_direction).format(delta=(view.trend_insight.soh_delta | abs)) }}
+          {% if view.trend_insight.cycles_delta is not none and view.trend_insight.cycles_delta > 0 %}
+            {{ t('battery.trend.insight.cycles').format(delta=view.trend_insight.cycles_delta) }}
+          {% endif %}
+        {% endif %}
+      </p>
+      <div class="legend-row">
+        <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--solar"></span>{{ t('battery.trend.table.cycles') }}</span>
+        <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--warm"></span>{{ t('battery.trend.table.soh') }}</span>
+      </div>
+    </div>
+    {% call macros.chart_with_fallback('battery-trend-chart', 'battery-trend', t('battery.trend.aria_label'), t('chart.fallback_label'), src=view.trends_src) %}
+      {% if view.trend_rows %}
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">{{ t('battery.trend.table.day') }}</th>
+            <th scope="col">{{ t('battery.trend.table.cycles') }}</th>
+            <th scope="col">{{ t('battery.trend.table.soh') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in view.trend_rows %}
+          <tr>
+            <td>{{ row.day }}</td>
+            <td class="num">{% if row.cycles_last is not none %}{{ row.cycles_last }}{% else %}{{ t('common.unavailable') }}{% endif %}</td>
+            <td class="num">{% if row.soh_last is not none %}{{ row.soh_last }}%{% else %}{{ t('common.unavailable') }}{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p>{{ t('battery.trend.empty') }}</p>
+      {% endif %}
+    {% endcall %}
+  </div>
+</section>
+
+<section class="battery-autonomy-section" aria-label="{{ t('battery.autonomy.heading') }}">
+  <h2 class="reveal">{{ t('battery.autonomy.heading') }}</h2>
+  {% if view.autonomy_rows %}
+  {#
+    F6 (orchestrator QA batch F, verified not a bug): the "projected"
+    column is `soc_start / (depth_of_discharge / duration_h)` --
+    how long the outage would have had to last, at the discharge rate
+    actually observed during it, to fully deplete the battery from its
+    starting charge. That is longer than the outage's own duration
+    whenever it did not fully deplete the battery, which read as a
+    measured duration under the old "Observed" header. The caption
+    below says so explicitly; the column header no longer claims a
+    direct measurement (`battery.autonomy.table.observed`).
+  #}
+  <p class="reveal mt-6 text-muted text-caption">{{ t('battery.autonomy.caption') }}</p>
+  <div class="table-scroll reveal mt-6">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">{{ t('battery.autonomy.table.start') }}</th>
+          <th scope="col">{{ t('battery.autonomy.table.end') }}</th>
+          <th scope="col">{{ t('battery.autonomy.table.projected') }}</th>
+          <th scope="col">{{ t('battery.autonomy.table.device_estimate') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in view.autonomy_rows %}
+        <tr>
+          <td>{{ format_local_dt(row.start_ts, tz) }}</td>
+          <td>{% if row.end_ts is not none %}{{ format_local_dt(row.end_ts, tz) }}{% else %}{{ t('outages.table.ongoing') }}{% endif %}</td>
+          {% if row.observed_h is none %}
+          <td colspan="2" class="text-muted">{{ t('battery.autonomy.not_enough_data') }}</td>
+          {% else %}
+          <td class="num">{{ format_hours_duration(row.observed_h, t) }}</td>
+          <td class="num">{% if row.device_estimate_h is not none %}{{ format_hours_duration(row.device_estimate_h, t) }}{% else %}{{ t('common.unavailable') }}{% endif %}</td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="reveal mt-6 text-muted">{{ t('battery.autonomy.empty') }}</p>
+  {% endif %}
+</section>
+
+<script src="/static/vendor/echarts.min.js" defer></script>
+{% endblock %}

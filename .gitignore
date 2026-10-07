@@ -4,3 +4,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 /data/
+
+# Local configuration holds the EcoFlow API keys; never commit it.
+.env

@@ -16,6 +16,7 @@ from ecoflow_stats.timeutil import (
     day_bounds,
     duration_parts,
     local_day,
+    period_start_ts,
     relative_time_unit,
     split_by_local_days,
 )
@@ -56,6 +57,25 @@ def test_day_bounds_returns_the_half_open_utc_interval_for_a_normal_day() -> Non
 
     assert end - start == 86_400
     assert start == _ts(2026, 1, 1, 6, 0, 0)  # 2026-01-01 00:00 -06:00 == 06:00 UTC
+
+
+def test_period_start_ts_returns_the_local_day_start_for_daily_granularity() -> None:
+    start, _end = day_bounds("2026-01-06", "America/Tegucigalpa")
+
+    assert period_start_ts("2026-01-06", "daily", "America/Tegucigalpa") == start
+
+
+def test_period_start_ts_returns_the_first_of_the_month_for_monthly_granularity() -> None:
+    """The monthly branch is a distinct code path from the daily one,
+    never exercised by a daily-granularity assertion: a defect that
+    copied `period_end_ts`'s monthly logic here (the first day of the
+    *next* month, that function's own eligibility rule for a period
+    that has *ended*) instead of writing this function's own "first
+    day of *this* month" would silently shift every monthly period's
+    start-of-history eligibility boundary forward by a month."""
+    this_month_start, _end = day_bounds("2026-01-01", "America/Tegucigalpa")
+
+    assert period_start_ts("2026-01", "monthly", "America/Tegucigalpa") == this_month_start
 
 
 def test_split_by_local_days_prorates_across_a_spring_forward_23_hour_day() -> None:

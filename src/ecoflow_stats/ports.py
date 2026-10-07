@@ -84,6 +84,11 @@ class SampleStore(Protocol):
         """Yield a device's samples within ``[start, end]``, in timestamp order."""
         ...
 
+    def earliest_ts(self, device_id: int) -> int | None:
+        """Return the timestamp of a device's very first recorded sample,
+        or ``None`` if it has none."""
+        ...
+
 
 class FailureLog(Protocol):
     """Record of collection attempts that did not produce a sample."""

@@ -694,6 +694,7 @@ def test_build_energy_view_model_sums_in_and_out_across_every_period() -> None:
         series_src="/api/v1/energy/daily?device=1",
         now_ts=_ALL_PERIODS_COMPLETE_NOW_TS,
         tz="UTC",
+        history_start_ts=0,
     )
     assert view.total_in_wh == 1_000.0 + 500.0 + 2_000.0 + 100.0
     assert view.total_out_wh == 200.0 + 300.0
@@ -718,6 +719,7 @@ def test_build_energy_view_model_reports_cost_unavailable_without_a_tariff() -> 
         series_src="/api/v1/energy/daily?device=1",
         now_ts=_ALL_PERIODS_COMPLETE_NOW_TS,
         tz="UTC",
+        history_start_ts=0,
     )
     assert view.total_cost == "unavailable"
     assert view.best_day is None
@@ -746,6 +748,7 @@ def test_build_energy_view_model_ranks_best_and_worst_day_by_cost() -> None:
         series_src="/api/v1/energy/daily?device=1",
         now_ts=_ALL_PERIODS_COMPLETE_NOW_TS,
         tz="UTC",
+        history_start_ts=0,
     )
     assert view.total_cost == 1.60
     assert view.best_day is not None
@@ -780,6 +783,7 @@ def test_build_energy_view_model_excludes_the_in_progress_day_from_best_day() ->
         series_src="/api/v1/energy/daily?device=1",
         now_ts=now_ts,
         tz="UTC",
+        history_start_ts=0,
     )
     assert view.best_day is not None
     assert view.best_day.period == "2026-01-07"
@@ -808,6 +812,7 @@ def test_build_energy_view_model_excludes_the_in_progress_day_from_worst_day() -
         series_src="/api/v1/energy/daily?device=1",
         now_ts=now_ts,
         tz="UTC",
+        history_start_ts=0,
     )
     assert view.worst_day is not None
     assert view.worst_day.period == "2026-01-07"
@@ -836,9 +841,108 @@ def test_build_energy_view_model_reports_no_best_or_worst_day_when_every_period_
         series_src="/api/v1/energy/daily?device=1",
         now_ts=now_ts,
         tz="UTC",
+        history_start_ts=0,
     )
     assert view.best_day is None
     assert view.worst_day is None
+
+
+def test_build_energy_view_model_excludes_the_partial_first_day_from_best_day() -> None:
+    """Real deployment defect: a device's recorded history begins mid-day
+    (23:24 local on its first day), so that day only holds a few
+    minutes of real data -- cheap not because it was efficient, but
+    because it barely existed. The symmetric start-of-history case to
+    F2's end-of-history exclusion: that artificially tiny cost must
+    never win "cheapest period" over a later, genuinely complete day.
+    Pass-1: catches `best_day` ranking over the partial first day
+    because only the end-of-period rule (`period_end_ts`) was ever
+    checked, never the start. Pass-2: dropping the `history_start_ts`
+    half of the `complete_rows` filter (keeping only the
+    `period_end_ts` check) turns this red -- `best_day` would become
+    the $0.01 partial first day."""
+    periods = [
+        _energy_period_dict("2026-01-06", chg_ac_wh=50.0, cost=0.01, currency="USD"),
+        _energy_period_dict("2026-01-07", chg_ac_wh=5_000.0, cost=1.00, currency="USD"),
+    ]
+    history_start_ts = int(datetime(2026, 1, 6, 23, 24, tzinfo=UTC).timestamp())
+    view = build_energy_view_model(
+        device_records=(_device(1, "SN0001"),),
+        selected_device_id=1,
+        range_start=_RANGE_START,
+        range_end=_RANGE_END,
+        granularity="daily",
+        periods=periods,
+        tariff=0.20,
+        currency="USD",
+        series_src="/api/v1/energy/daily?device=1",
+        now_ts=_ALL_PERIODS_COMPLETE_NOW_TS,
+        tz="UTC",
+        history_start_ts=history_start_ts,
+    )
+    assert view.best_day is not None
+    assert view.best_day.period == "2026-01-07"
+
+
+def test_build_energy_view_model_excludes_the_partial_first_day_from_worst_day() -> None:
+    """Mirror of the best-day case above: a partial first day must also
+    never win "most expensive period" just because its artificially
+    tiny slice of data happened to be costly. Pass-2: same filter
+    reversion as above turns this red -- `worst_day` would become the
+    partial first day instead of the genuinely complete, truly most
+    expensive one."""
+    periods = [
+        _energy_period_dict("2026-01-06", chg_ac_wh=25_000.0, cost=5.00, currency="USD"),
+        _energy_period_dict("2026-01-07", chg_ac_wh=1_000.0, cost=0.20, currency="USD"),
+    ]
+    history_start_ts = int(datetime(2026, 1, 6, 23, 24, tzinfo=UTC).timestamp())
+    view = build_energy_view_model(
+        device_records=(_device(1, "SN0001"),),
+        selected_device_id=1,
+        range_start=_RANGE_START,
+        range_end=_RANGE_END,
+        granularity="daily",
+        periods=periods,
+        tariff=0.20,
+        currency="USD",
+        series_src="/api/v1/energy/daily?device=1",
+        now_ts=_ALL_PERIODS_COMPLETE_NOW_TS,
+        tz="UTC",
+        history_start_ts=history_start_ts,
+    )
+    assert view.worst_day is not None
+    assert view.worst_day.period == "2026-01-07"
+
+
+def test_build_energy_view_model_keeps_the_first_day_eligible_when_history_starts_at_its_local_midnight() -> (
+    None
+):
+    """Boundary case: history starting at exactly the first day's local
+    midnight means that day is fully covered, not partial -- it must
+    stay eligible. Pass-2: a defect that compared with a strict `<`
+    instead of `<=` (or compared against the period's *end* instead
+    of its *start*) would wrongly exclude this fully-covered day,
+    turning this red."""
+    periods = [
+        _energy_period_dict("2026-01-06", chg_ac_wh=50.0, cost=0.01, currency="USD"),
+        _energy_period_dict("2026-01-07", chg_ac_wh=5_000.0, cost=1.00, currency="USD"),
+    ]
+    history_start_ts = int(datetime(2026, 1, 6, 0, 0, 0, tzinfo=UTC).timestamp())
+    view = build_energy_view_model(
+        device_records=(_device(1, "SN0001"),),
+        selected_device_id=1,
+        range_start=_RANGE_START,
+        range_end=_RANGE_END,
+        granularity="daily",
+        periods=periods,
+        tariff=0.20,
+        currency="USD",
+        series_src="/api/v1/energy/daily?device=1",
+        now_ts=_ALL_PERIODS_COMPLETE_NOW_TS,
+        tz="UTC",
+        history_start_ts=history_start_ts,
+    )
+    assert view.best_day is not None
+    assert view.best_day.period == "2026-01-06"
 
 
 def _grid_row(

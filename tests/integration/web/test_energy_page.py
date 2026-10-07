@@ -21,8 +21,10 @@ from fastapi.testclient import TestClient
 
 from ecoflow_stats import bootstrap
 from ecoflow_stats.config import load_settings
+from ecoflow_stats.devices.reading import Reading
 from ecoflow_stats.jobs import SupervisedTask, SupervisedTaskHandle
 from ecoflow_stats.storage.rollups import RollupStore
+from ecoflow_stats.storage.samples import SampleStore
 from ecoflow_stats.web.app import create_app
 from tests.fakes import FakeClock
 
@@ -218,7 +220,7 @@ def test_the_energy_page_never_crowns_the_in_progress_day_as_cheapest(
     so an in-progress day wins `best_day` again -- the exact
     "zero production callers" gap class this project already guards
     against for its pure builders."""
-    application, _device_id, client = _client(
+    application, device_id, client = _client(
         monkeypatch,
         tmp_path,
         tariff=0.20,
@@ -230,12 +232,60 @@ def test_the_energy_page_never_crowns_the_in_progress_day_as_cheapest(
         ],
     )
     try:
+        # History reaches back to (at least) the first rollup day, so the
+        # new partial-first-day guard does not itself make every period
+        # ineligible here -- this test is only about the end-of-history
+        # (`now`/`tz`) exclusion, proven separately below.
+        SampleStore(application.database.writer).add(
+            device_id, int(datetime(2026, 1, 7, 0, 0, tzinfo=UTC).timestamp()), 1, Reading(soc=80)
+        )
+        application.database.writer.commit()
         with client:
             response = client.get("/energy")
         assert response.status_code == 200
         html = response.text
         best_day_card = html[html.index("Cheapest period") : html.index("Most expensive period")]
         assert "2026-01-09" not in best_day_card
+        assert "Jan 8" in best_day_card
+    finally:
+        application.database.close()
+
+
+def test_the_energy_page_never_crowns_the_partial_first_day_as_cheapest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Real deployment defect, the symmetric start-of-history case to
+    the in-progress-day guard above: a device's recorded history
+    begins mid-day (23:24 local on 2026-01-07), so that day's own
+    rollup row holds only a few minutes of real data. Its
+    artificially tiny cost must never win "Cheapest period" over
+    2026-01-08, the genuinely complete, truly cheapest day. Pass-1:
+    catches the route never wiring the device's earliest recorded
+    sample (`SampleStore.earliest_ts`) through to
+    `build_energy_view_model`'s `history_start_ts` -- the same wiring
+    gap the test above guards for `now`/`tz`, but at the other end of
+    the device's history."""
+    application, device_id, client = _client(
+        monkeypatch,
+        tmp_path,
+        tariff=0.20,
+        currency="USD",
+        rollups=[
+            _energy_row("2026-01-07", chg_ac_wh=50.0),  # $0.01, partial first day
+            _energy_row("2026-01-08", chg_ac_wh=5_000.0),  # $1.00, genuinely complete
+        ],
+    )
+    try:
+        sample_store = SampleStore(application.database.writer)
+        history_start_ts = int(datetime(2026, 1, 7, 23, 24, tzinfo=UTC).timestamp())
+        sample_store.add(device_id, history_start_ts, 1, Reading(soc=80))
+        application.database.writer.commit()
+        with client:
+            response = client.get("/energy")
+        assert response.status_code == 200
+        html = response.text
+        best_day_card = html[html.index("Cheapest period") : html.index("Most expensive period")]
+        assert "Jan 7" not in best_day_card
         assert "Jan 8" in best_day_card
     finally:
         application.database.close()

@@ -142,7 +142,6 @@
   "battery.autonomy.table.end": "End",
   "battery.autonomy.table.observed": "Observed",
   "battery.autonomy.table.device_estimate": "Device estimate",
-  "battery.autonomy.hours_value": "{hours}h",
   "battery.autonomy.not_enough_data": "Not enough data",
   "battery.autonomy.empty": "No outages recorded in this range.",
   "battery.trend.heading": "Cycle and state-of-health trend",

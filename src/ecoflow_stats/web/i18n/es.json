@@ -142,7 +142,6 @@
   "battery.autonomy.table.end": "Fin",
   "battery.autonomy.table.observed": "Observada",
   "battery.autonomy.table.device_estimate": "Estimación del dispositivo",
-  "battery.autonomy.hours_value": "{hours} h",
   "battery.autonomy.not_enough_data": "Datos insuficientes",
   "battery.autonomy.empty": "No se registraron cortes en este rango.",
   "battery.trend.heading": "Tendencia de ciclos y estado de salud",

@@ -191,8 +191,8 @@
           {% if row.observed_h is none %}
           <td colspan="2" class="text-muted">{{ t('battery.autonomy.not_enough_data') }}</td>
           {% else %}
-          <td class="num">{{ t('battery.autonomy.hours_value').format(hours=row.observed_h) }}</td>
-          <td class="num">{% if row.device_estimate_h is not none %}{{ t('battery.autonomy.hours_value').format(hours=row.device_estimate_h) }}{% else %}{{ t('common.unavailable') }}{% endif %}</td>
+          <td class="num">{{ format_hours_duration(row.observed_h, t) }}</td>
+          <td class="num">{% if row.device_estimate_h is not none %}{{ format_hours_duration(row.device_estimate_h, t) }}{% else %}{{ t('common.unavailable') }}{% endif %}</td>
           {% endif %}
         </tr>
         {% endfor %}

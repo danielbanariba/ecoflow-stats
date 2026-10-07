@@ -233,7 +233,12 @@ def test_the_autonomy_table_shows_the_comparison_unavailable_and_not_enough_data
     data" case -- all three distinct rows on one page. Pass-1: a
     defect that conflated "unavailable" with "not enough data", or
     dropped either guard, would misrepresent which outages actually
-    have a usable comparison."""
+    have a usable comparison.
+
+    C-01 followup (qa-report-ui-02.md): asserts the human duration
+    format (`format_hours_duration`) rather than the old decimal-hours
+    `"6.0h"` this table rendered before that fix -- unifying it with
+    every other duration on this app."""
     qualifying_start = _RANGE_START + 1_000
     missing_estimate_start = _RANGE_START + 50_000
     too_short_start = _RANGE_START + 90_000
@@ -263,8 +268,8 @@ def test_the_autonomy_table_shows_the_comparison_unavailable_and_not_enough_data
             response = client.get("/battery")
 
         html = response.text
-        assert "6.0h" in html
-        assert "4.0h" in html
+        assert "6 h" in html
+        assert "4 h" in html
         assert "Not enough data" in html
         assert "Unavailable" in html
     finally:
@@ -276,10 +281,18 @@ def test_the_autonomy_table_rounds_both_hours_columns_to_one_decimal_place(
 ) -> None:
     """Visual-QA batch fix01, fix 2: both hours columns are division
     results that essentially never land on a round number -- a defect
-    that rendered the raw float would show `6.083333333333333h` /
-    `6.666666666666667h` instead of a clean `6.1h` / `6.7h`. Pass-1: a
-    user comparing observed autonomy against the device's own estimate
-    cannot read 15 significant digits as a glance-able number."""
+    that skipped the one-decimal rounding before converting to a
+    duration would show a different, noisier minutes figure than the
+    clean one a rounded ratio produces.
+
+    C-01 followup (qa-report-ui-02.md): now asserts through
+    `format_hours_duration`'s human output rather than the old
+    decimal-hours `"6.1h"`/`"6.7h"` strings -- the rounding this test
+    was written for still matters for the result's minutes component:
+    the unrounded `73/12 = 6.0833...h` would render "6 h 5 min", one
+    minute off from the rounded-to-6.1h "6 h 6 min" this asserts; the
+    unrounded `400/60 = 6.6666...h` would render "6 h 40 min", two
+    minutes off from the rounded-to-6.7h "6 h 42 min" this asserts."""
     start = _RANGE_START + 1_000
     application, _device_id, client = _client(
         monkeypatch,
@@ -299,10 +312,10 @@ def test_the_autonomy_table_rounds_both_hours_columns_to_one_decimal_place(
             response = client.get("/battery")
 
         html = response.text
-        assert "6.1h" in html
-        assert "6.7h" in html
-        assert "6.083333333333333h" not in html
-        assert "6.666666666666667h" not in html
+        assert "6 h 6 min" in html
+        assert "6 h 42 min" in html
+        assert "6 h 5 min" not in html
+        assert "6 h 40 min" not in html
     finally:
         application.database.close()
 

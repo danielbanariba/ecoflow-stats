@@ -35,6 +35,7 @@ from ecoflow_stats.web.views import (
     build_overview_view_model,
     format_compact_local_dt,
     format_duration,
+    format_hours_duration,
     format_local_dt,
 )
 
@@ -547,6 +548,23 @@ def test_format_duration_joins_duration_parts_through_the_translator() -> None:
     assert format_duration(5_100, _unit_catalog) == "1 h 25 min"
     assert format_duration(183_600, _unit_catalog) == "2 d 3 h"
     assert format_duration(0, _unit_catalog) == "0 s"
+
+
+def test_format_hours_duration_converts_to_seconds_through_format_duration() -> None:
+    """C-01 followup (qa-report-ui-02.md): the battery page's observed-
+    autonomy table was the one place left rendering a duration as
+    decimal hours (`"14.0h"`) while every other duration on this app
+    -- including this same page's own `format_duration` calls --
+    already showed `"12 h 31 min"`. Pass-1/Pass-2: a defect that
+    treated `hours` as already-seconds (skipping the `* 3600`), or
+    truncated instead of rounding, would fail these exact
+    conversions, including the two round-trip-lossy values
+    (`6.1`, `6.7`) that only come out clean because of the
+    conversion's own rounding."""
+    assert format_hours_duration(2.0, _unit_catalog) == "2 h"
+    assert format_hours_duration(0.0, _unit_catalog) == "0 s"
+    assert format_hours_duration(6.1, _unit_catalog) == "6 h 6 min"
+    assert format_hours_duration(6.7, _unit_catalog) == "6 h 42 min"
 
 
 def test_build_outages_view_model_assembles_every_part_without_dropping_fields() -> None:

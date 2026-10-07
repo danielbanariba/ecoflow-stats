@@ -386,6 +386,25 @@ def format_duration(seconds: int, t: Callable[..., str]) -> str:
     )
 
 
+def format_hours_duration(hours: float, t: Callable[..., str]) -> str:
+    """Render a duration given in (fractional) hours through the exact
+    same `format_duration` every other duration on this app already
+    uses, instead of this page's own `"{hours}h"` plain substitution
+    (C-01 followup, qa-report-ui-02.md: the battery page's observed-
+    autonomy table was the one place left rendering a duration as a
+    decimal-hours value like `"14.0h"` while everywhere else -- the
+    overview's "Longest outage"/"Time on battery" tiles, the outages
+    page's summary -- already showed `"12 h 31 min"`. Chart axes are
+    deliberately left alone: a tick label's own compact scale is a
+    different, legitimate concern from a stat value's readability).
+
+    `build_battery_autonomy_row` already rounds `hours` to one decimal
+    before this ever runs, so the `round()` below only guards against
+    an exact `.5`-second float artifact from that rounding itself
+    (for example `6.1 * 3600`), never the raw unrounded ratio."""
+    return format_duration(round(hours * 3600), t)
+
+
 def format_compact_local_dt(ts: int, tz: str, show_date: bool) -> str:
     """Render an epoch-second timestamp as a compact local time for the
     overview's "Last update" tile (C-02, qa-report-ui-01.md): just
@@ -540,10 +559,12 @@ _AUTONOMY_HOURS_DECIMALS = 1
 discharge rate; minutes / 60) and essentially never land on a round
 number -- displaying the raw float leaked binary noise like
 `6.083333333333333h` instead of a clean `6.1h` (visual-QA batch fix01,
-fix 2). Rounded here, once, for both columns, rather than in the i18n
-template string -- `battery.autonomy.hours_value` stays a plain
-`"{hours}h"` with no decimal spec, matching how every other formatted
-number in this template set is already a plain value substitution."""
+fix 2). Rounded here, once, for both columns, before `format_hours_
+duration` (C-01 followup, qa-report-ui-02.md) turns that one decimal
+into the same `"6 h 6 min"` style every other duration on this app
+renders -- rounding first keeps the two independent concerns (how
+many decimals a ratio deserves, and how a duration should read)
+separate."""
 
 
 def build_battery_autonomy_row(event: Event) -> BatteryAutonomyRow:

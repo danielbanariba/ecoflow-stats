@@ -892,7 +892,7 @@ section + section {
 /* ---------- Summary stat grid (outages page) ---------- */
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: var(--space-4);
 }
 
@@ -901,16 +901,27 @@ section + section {
    earlier (1100px instead of 900px) gives each card enough width
    before that point; `white-space: nowrap` on the value itself (below)
    is the second half of the fix, so a value that still does not fit
-   its column clips cleanly rather than wrapping. */
+   its column clips cleanly rather than wrapping.
+
+   UI2-01 (qa-report-ui-02.md): a plain `1fr` track cannot shrink
+   below its content's intrinsic width -- combined with `nowrap` on a
+   long value ("Período más económico" / "118.8 - 121.2 V"), that
+   forced the whole grid wider than its container at 375/768px and at
+   200% zoom, a horizontal-scroll regression this same P-01 fix
+   introduced. `minmax(0, 1fr)` lets each track shrink to its
+   container's own share of the width instead of to its longest
+   child's nowrap width; `.stat-grid dd`'s own `overflow`/
+   `text-overflow` below then clips/ellipsizes a value that still
+   does not fit, rather than forcing the grid to overflow. */
 @media (max-width: 1100px) {
   .stat-grid {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 560px) {
   .stat-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-3);
   }
 }
@@ -948,6 +959,12 @@ section + section {
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  /* UI2-01 (qa-report-ui-02.md): paired with `minmax(0, 1fr)` above --
+     once the track can shrink below this value's intrinsic width, an
+     overflowing value clips with an ellipsis instead of forcing the
+     grid itself wider than its container. */
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---------- Chart cards ---------- */

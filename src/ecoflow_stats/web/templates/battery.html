@@ -173,13 +173,25 @@
 <section class="battery-autonomy-section" aria-label="{{ t('battery.autonomy.heading') }}">
   <h2 class="reveal">{{ t('battery.autonomy.heading') }}</h2>
   {% if view.autonomy_rows %}
+  {#
+    F6 (orchestrator QA batch F, verified not a bug): the "projected"
+    column is `soc_start / (depth_of_discharge / duration_h)` --
+    how long the outage would have had to last, at the discharge rate
+    actually observed during it, to fully deplete the battery from its
+    starting charge. That is longer than the outage's own duration
+    whenever it did not fully deplete the battery, which read as a
+    measured duration under the old "Observed" header. The caption
+    below says so explicitly; the column header no longer claims a
+    direct measurement (`battery.autonomy.table.observed`).
+  #}
+  <p class="reveal mt-6 text-muted text-caption">{{ t('battery.autonomy.caption') }}</p>
   <div class="table-scroll reveal mt-6">
     <table>
       <thead>
         <tr>
           <th scope="col">{{ t('battery.autonomy.table.start') }}</th>
           <th scope="col">{{ t('battery.autonomy.table.end') }}</th>
-          <th scope="col">{{ t('battery.autonomy.table.observed') }}</th>
+          <th scope="col">{{ t('battery.autonomy.table.projected') }}</th>
           <th scope="col">{{ t('battery.autonomy.table.device_estimate') }}</th>
         </tr>
       </thead>

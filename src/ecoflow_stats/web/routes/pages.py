@@ -523,6 +523,7 @@ def energy_page(
         series_src=f"/api/v1/energy/daily?device={selected_id}&from={range_start}&to={range_end}",
         now_ts=int(ctx.now().timestamp()),
         tz=api_ctx.tz,
+        history_start_ts=ctx.sample_store.earliest_ts(selected_id),
     )
     response = TEMPLATES.TemplateResponse(
         request,

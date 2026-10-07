@@ -24,7 +24,7 @@ from ecoflow_stats.battery.stats import (
     soc_history,
     summarize_battery_trend,
 )
-from ecoflow_stats.timeutil import duration_parts, local_day, period_end_ts
+from ecoflow_stats.timeutil import duration_parts, local_day, period_end_ts, period_start_ts
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -764,6 +764,7 @@ def build_energy_view_model(
     series_src: str,
     now_ts: int,
     tz: str,
+    history_start_ts: int | None,
 ) -> EnergyViewModel:
     """Build the energy page's view model from
     `web.routes.api.build_energy_periods`'s already-computed period
@@ -772,21 +773,30 @@ def build_energy_view_model(
     period shares the one app-wide tariff and can never disagree with
     each other about whether a cost was computed at all.
 
-    `now_ts`/`tz` decide `best_day`/`worst_day`'s eligibility, never
-    `total_in_wh`/`total_out_wh`/`total_cost` (F2, orchestrator QA
-    batch F): the current local day's (or month's) own in-progress
-    period still contributes honestly to the range's totals -- it is
-    only excluded from the "cheapest"/"most expensive" ranking, which
-    a period with just a few hours of data would otherwise win or
-    lose unfairly against a period that ran its full length. A range
-    with no complete period at all reports `None` for both, same as
-    no tariff being configured -- never a ranking over an incomplete
-    field."""
+    `now_ts`/`tz`/`history_start_ts` decide `best_day`/`worst_day`'s
+    eligibility, never `total_in_wh`/`total_out_wh`/`total_cost` (F2,
+    orchestrator QA batch F, extended to the symmetric start-of-
+    history case): the current local day's (or month's) own in-
+    progress period, and a device's partial first day/month of
+    recorded history, both still contribute honestly to the range's
+    totals -- they are only excluded from the "cheapest"/"most
+    expensive" ranking, which a period with just a few hours of real
+    data would otherwise win or lose unfairly against one that ran
+    its full length. A period is eligible only when it has both ended
+    (`now_ts`) and started no earlier than the device's observed
+    history (`history_start_ts`); `history_start_ts=None` (no recorded
+    sample at all) makes every period ineligible. A range with no
+    complete period at all reports `None` for both, same as no tariff
+    being configured -- never a ranking over an incomplete field."""
     rows = tuple(build_energy_period_row(period) for period in periods)
     total_in_wh = sum(row.chg_ac_wh + row.chg_dc_wh + row.chg_solar_wh for row in rows)
     total_out_wh = sum(row.dsg_ac_wh + row.dsg_dc_wh for row in rows)
     complete_rows = tuple(
-        row for row in rows if period_end_ts(row.period, granularity, tz) <= now_ts
+        row
+        for row in rows
+        if period_end_ts(row.period, granularity, tz) <= now_ts
+        and history_start_ts is not None
+        and history_start_ts <= period_start_ts(row.period, granularity, tz)
     )
     best_day: EnergyPeriodRow | None = None
     worst_day: EnergyPeriodRow | None = None

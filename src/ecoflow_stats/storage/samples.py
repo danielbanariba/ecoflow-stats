@@ -77,6 +77,18 @@ class SampleStore:
         ).fetchone()
         return _row_to_sample(row) if row is not None else None
 
+    def earliest_ts(self, device_id: int) -> int | None:
+        """Return the timestamp of a device's very first recorded sample,
+        or ``None`` if it has none -- lets a caller tell whether a
+        period's start falls before the device's observed history even
+        began (energy page: excluding a partial first day/month from
+        the "cheapest"/"most expensive" ranking, the symmetric case to
+        excluding a still-in-progress current period)."""
+        row = self._conn.execute(
+            "SELECT MIN(ts) AS ts FROM samples WHERE device_id = ?", (device_id,)
+        ).fetchone()
+        return row["ts"] if row is not None else None
+
     def between(self, device_id: int, start: int, end: int) -> Iterator[StoredSample]:
         """Yield a device's samples within ``[start, end]``, in timestamp order."""
         rows = self._conn.execute(

@@ -66,6 +66,29 @@ def period_end_ts(period: str, granularity: str, tz: str) -> int:
     return day_bounds(period, tz)[1]
 
 
+def period_start_ts(period: str, granularity: str, tz: str) -> int:
+    """The inclusive UTC epoch-second start boundary of a local calendar
+    period -- `"YYYY-MM-DD"` for `granularity="daily"`,
+    `"YYYY-MM"` for `"monthly"` -- under `tz`.
+
+    Lets a caller tell whether a period's observed history reaches far
+    enough back to make it eligible for a best/worst ranking (energy
+    requirement: a card like "cheapest period" must never crown a
+    period only partially covered by recorded history, such as the
+    very first local day or month a device was ever observed, the
+    same way `period_end_ts` already excludes a period still in
+    progress). Delegates the daily case straight to `day_bounds`; the
+    monthly case reuses the same `day_bounds` call on the first day of
+    *this* month -- the mirror image of `period_end_ts`'s "first day
+    of the *next* month" -- so a month's own DST transitions (if any
+    of its days have one) are resolved exactly the way `day_bounds`
+    already resolves them, never a fixed-length approximation."""
+    if granularity == "monthly":
+        year, month = (int(part) for part in period.split("-"))
+        return day_bounds(f"{year:04d}-{month:02d}-01", tz)[0]
+    return day_bounds(period, tz)[0]
+
+
 def relative_time_unit(age_s: int) -> tuple[str, int]:
     """Bucket a device sample's age in seconds into the coarsest
     human-friendly unit and count for an "X ago" display (UI-01,
@@ -161,6 +184,7 @@ __all__ = [
     "duration_parts",
     "local_day",
     "period_end_ts",
+    "period_start_ts",
     "relative_time_unit",
     "split_by_local_days",
 ]

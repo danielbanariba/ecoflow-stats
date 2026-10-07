@@ -148,6 +148,36 @@ def test_latest_in_range_is_none_when_the_range_has_no_sample(tmp_path: Path) ->
         db.close()
 
 
+def test_earliest_ts_returns_the_minimum_ts_across_every_recorded_sample(tmp_path: Path) -> None:
+    """Energy page: deciding whether a period's start falls before a
+    device's observed history began needs the true earliest sample,
+    not merely *a* sample. Pass-1/Pass-2: inserting rows out of
+    timestamp order and asserting the minimum catches an
+    implementation that returned the first-inserted or most-recently-
+    inserted row instead of aggregating with `MIN(ts)` (e.g. reusing
+    `latest`'s `ORDER BY ts DESC LIMIT 1` with the sort direction
+    flipped incorrectly, or not flipped at all)."""
+    store, db, device_id = _store(tmp_path)
+    try:
+        for ts in (200, 50, 100):
+            store.add(device_id, ts, 1, Reading(soc=ts // 10))
+        assert store.earliest_ts(device_id) == 50
+    finally:
+        db.close()
+
+
+def test_earliest_ts_returns_none_when_no_samples_exist(tmp_path: Path) -> None:
+    """A device with no recorded sample at all has no observed history
+    yet -- `None`, never a fabricated `0` that would make `timeutil.
+    period_start_ts`'s `0 <= period_start_ts(...)` comparison wrongly
+    treat every period as fully covered by history."""
+    store, db, device_id = _store(tmp_path)
+    try:
+        assert store.earliest_ts(device_id) is None
+    finally:
+        db.close()
+
+
 def test_add_batch_inserts_every_row_once(tmp_path: Path) -> None:
     store, db, device_id = _store(tmp_path)
     try:

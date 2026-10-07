@@ -99,6 +99,39 @@ async def test_a_successful_fetch_marks_the_outage_derivation_dirty(tmp_path: Pa
 
 
 @pytest.mark.anyio
+async def test_a_successful_fetch_marks_the_rollups_derivation_dirty(tmp_path: Path) -> None:
+    """Without this, a live-collected sample never triggers a rollups
+    recompute either: `rollups.service.derive_rollups` only recomputes a
+    device's `daily_rollups` when its "rollups" derivation is dirty, and
+    nothing else ever marks it -- a device fed only by the collector
+    would never get a single day of `daily_rollups` populated.
+    """
+    db, samples, failures, device_id = _env(tmp_path)
+    try:
+        derivations = DerivationStore(db.writer)
+        cloud = FakeDeviceCloud(quota_results={"BA31ZEB1SF7F0001": _VALID_PAYLOAD})
+        device = CollectorDevice(device_id=device_id, sn="BA31ZEB1SF7F0001")
+        clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
+
+        stored = await collect_one(
+            device,
+            cloud=cloud,
+            registry=AdapterRegistry(REGISTERED),
+            samples=samples,
+            failures=failures,
+            clock=clock,
+            derivation_store=derivations,
+        )
+
+        assert stored is True
+        derivation = derivations.get(device_id, "rollups")
+        assert derivation is not None
+        assert derivation.dirty_from_ts == int(clock.now().timestamp())
+    finally:
+        db.close()
+
+
+@pytest.mark.anyio
 async def test_a_failed_fetch_does_not_mark_the_outage_derivation_dirty(tmp_path: Path) -> None:
     """A fetch that stored nothing has nothing new for the derive job to
     recompute -- marking dirty anyway would force a needless recompute on

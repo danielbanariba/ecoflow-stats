@@ -1,0 +1,368 @@
+"""Command-line entry point: ``ecoflow-stats serve|check|import|recompute|healthcheck``.
+
+Every subcommand shares the same fail-fast prefix — load and validate the
+environment before doing anything else — so a misconfigured deployment never
+gets partway into collecting, importing or serving. ``serve`` builds the
+composition root (``bootstrap.py``) and the FastAPI app (``web/app.py``) and
+hands it to a server; ``check`` runs the full one-shot device check;
+``import`` takes a verified, read-only snapshot of the legacy ecoflow-panel
+sources, then imports the outage log and samples into the application
+database (or, with ``--dry-run``, into a throwaway one) and prints a
+report; ``recompute`` forces a full outage recompute for every configured
+device against the real application database (the design's "CLI
+recompute (full)" trigger), without starting the collector or the server;
+``healthcheck`` probes this same process's own ``/healthz``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import sys
+import tempfile
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import uvicorn
+
+from ecoflow_stats import bootstrap
+from ecoflow_stats.acquisition.check import run_check
+from ecoflow_stats.acquisition.ecoflow_client import EcoFlowCloudClient
+from ecoflow_stats.config import ConfigError, load_settings
+from ecoflow_stats.devices.models import REGISTERED
+from ecoflow_stats.devices.registry import AdapterRegistry
+from ecoflow_stats.healthcheck import run_healthcheck
+from ecoflow_stats.history_import.panel_samples import SnapshotError, make_snapshot
+from ecoflow_stats.history_import.report import ImportReport
+from ecoflow_stats.history_import.service import run_import
+from ecoflow_stats.logs import configure_logging
+from ecoflow_stats.outages.model import DetectorConfig
+from ecoflow_stats.outages.service import derive_outages
+from ecoflow_stats.storage.database import Database
+from ecoflow_stats.storage.derivations import DerivationStore
+from ecoflow_stats.storage.devices import DeviceStore
+from ecoflow_stats.storage.failures import FailureLog
+from ecoflow_stats.storage.imports import ImportRunStore
+from ecoflow_stats.storage.outages import OutageStore
+from ecoflow_stats.storage.runs import RunLog
+from ecoflow_stats.storage.samples import SampleStore
+from ecoflow_stats.web.app import create_app
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+    from typing import TextIO
+
+    from fastapi import FastAPI
+
+    from ecoflow_stats.config import Settings
+    from ecoflow_stats.ports import DeviceCloud
+
+_SUBCOMMANDS = ("serve", "check", "import", "recompute", "healthcheck")
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="ecoflow-stats")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    for name in _SUBCOMMANDS:
+        subparser = subparsers.add_parser(name)
+        if name == "check":
+            subparser.add_argument("--serial", default=None)
+        if name == "import":
+            subparser.add_argument("--serial", default=None)
+            subparser.add_argument("--source-tz", default=None)
+            # CLI-01 (qa-report-data-01.md): these used to default to
+            # the container's own bind-mount paths
+            # (/import/samples.db, /import/outages.log), so running
+            # `import` outside a container without both flags crashed
+            # on a path that was never going to exist. Neither the
+            # Dockerfile's ENTRYPOINT/CMD nor any documented
+            # invocation relies on these bare paths -- `import` is
+            # always a manual, explicit operator command -- so they
+            # default to `None` and `_run_import_command` requires at
+            # least one of the two to actually be given.
+            subparser.add_argument("--samples", default=None)
+            subparser.add_argument("--outage-log", default=None)
+            subparser.add_argument("--dry-run", action="store_true")
+    return parser
+
+
+async def _run_check_command(
+    settings: Settings,
+    requested_serial: str | None,
+    *,
+    cloud: DeviceCloud | None = None,
+    out: TextIO = sys.stdout,
+) -> int:
+    """Wire `Settings` into `run_check`'s narrower inputs.
+
+    `cloud` is injectable so tests can exercise this wiring against a fake
+    cloud instead of the real one — `main()`'s production path never
+    passes it, so it always builds the real `EcoFlowCloudClient`.
+    """
+    client = (
+        cloud
+        if cloud is not None
+        else EcoFlowCloudClient(settings.api_host, settings.access_key, settings.secret_key)
+    )
+    return await run_check(
+        configured_serials=[device.serial for device in settings.devices],
+        requested_serial=requested_serial,
+        cloud=client,
+        registry=AdapterRegistry(REGISTERED),
+        out=out,
+    )
+
+
+def _uvicorn_run(app: FastAPI, host: str, port: int, trusted_proxies: Sequence[str] = ()) -> None:
+    """The real server runner; a thin wrapper so tests can inject a fake
+    one instead of actually binding a socket and blocking forever.
+
+    ``trusted_proxies`` (SEC-02): uvicorn's own default
+    (``proxy_headers=True``, ``forwarded_allow_ips="127.0.0.1"``) trusts
+    an ``X-Forwarded-For`` header from any loopback-originated peer --
+    including a client reaching this loopback-bound port directly, this
+    app's own documented self-hosted deployment model -- letting it
+    override the client address ``AccessControlMiddleware``'s LAN guard
+    checks before the guard ever runs. Default to trusting no proxy at
+    all; only the operator's explicitly configured
+    ``ECOFLOW_STATS_TRUSTED_PROXIES`` enables it, scoped to exactly that
+    CIDR list.
+    """
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_config=None,
+        proxy_headers=bool(trusted_proxies),
+        forwarded_allow_ips=list(trusted_proxies) if trusted_proxies else [],
+    )
+
+
+def _run_serve_command(
+    settings: Settings,
+    *,
+    runner: Callable[[FastAPI, str, int, Sequence[str]], None] | None = None,
+) -> int:
+    """Build the composition root and serve it.
+
+    ``runner`` is injectable for the same reason ``_run_check_command``
+    injects ``cloud``: the production path (``main()``) never passes it, so
+    it always calls the real, blocking ``_uvicorn_run``.
+    """
+    configure_logging(settings)
+    application = bootstrap.build(settings)
+    app = create_app(application)
+    serve = runner if runner is not None else _uvicorn_run
+    serve(app, settings.host, settings.port, settings.trusted_proxies)
+    return 0
+
+
+def _import_into(
+    *,
+    db_path: Path,
+    serial: str,
+    adapter_id: str,
+    source_tz: str,
+    snapshot_samples_db: Path | None,
+    snapshot_outage_log: Path | None,
+    now: datetime,
+    record_run: bool,
+) -> ImportReport:
+    """Open the database at `db_path`, seed the device row, and run the
+    import against it. `record_run` is false for `--dry-run`: the import
+    still runs for real against `db_path` (so the report reflects real
+    validation), but no `import_runs` completion is recorded — the
+    caller always points `db_path` at a throwaway database for a dry run,
+    never at the real application database.
+    """
+    database = Database(db_path)
+    try:
+        now_s = int(now.timestamp())
+        device = DeviceStore(database.writer).upsert(
+            sn=serial, adapter_id=adapter_id, created_at=now_s
+        )
+        import_id = ImportRunStore(database.writer).start(
+            device.id, started_at=now_s, source_tz=source_tz
+        )
+        report = run_import(
+            snapshot_samples_db=snapshot_samples_db,
+            snapshot_outage_log=snapshot_outage_log,
+            device_id=device.id,
+            source_tz=source_tz,
+            import_id=import_id,
+            writer_conn=database.writer,
+            now=now,
+            derivation_store=DerivationStore(database.writer),
+        )
+        if record_run:
+            ImportRunStore(database.writer).finish(
+                import_id, int(now.timestamp()), report.to_json()
+            )
+        return report
+    finally:
+        database.close()
+
+
+def _run_recompute_command(settings: Settings, *, now: datetime | None = None) -> int:
+    """Force a full outage recompute for every configured device, against
+    the real application database (design's "CLI recompute (full)"
+    trigger) -- never the collector or the server.
+
+    `now` is injectable for tests only; the production path (`main`)
+    never passes it, so it always uses the real wall clock.
+    """
+    moment = now if now is not None else datetime.now(UTC)
+    database = Database(settings.data_dir / "ecoflow-stats.db")
+    try:
+        now_s = int(moment.timestamp())
+        device_store = DeviceStore(database.writer)
+        sample_store = SampleStore(database.writer)
+        failure_log = FailureLog(database.writer)
+        run_log = RunLog(database.writer)
+        outage_store = OutageStore(database.writer)
+        derivation_store = DerivationStore(database.writer)
+        config = DetectorConfig(
+            threshold_v=settings.outage_threshold_v, gap_threshold_s=settings.gap_threshold
+        )
+
+        for device_config in settings.devices:
+            record = device_store.upsert(
+                sn=device_config.serial,
+                adapter_id=device_config.adapter_id or "generic",
+                created_at=now_s,
+            )
+            database.writer.execute("BEGIN IMMEDIATE")
+            try:
+                derive_outages(
+                    record.id,
+                    sample_store=sample_store,
+                    failure_log=failure_log,
+                    run_log=run_log,
+                    outage_store=outage_store,
+                    derivation_store=derivation_store,
+                    config=config,
+                    now=moment,
+                    full=True,
+                )
+            except Exception:
+                database.writer.rollback()
+                raise
+            database.writer.commit()
+            events = outage_store.events(record.id, 0, now_s)
+            print(f"recomputed …{record.sn[-4:]}: {len(events)} outage event(s)")
+        return 0
+    finally:
+        database.close()
+
+
+def _run_import_command(settings: Settings, args: argparse.Namespace) -> int:
+    """Validate the import's required inputs, take a verified read-only
+    snapshot of both legacy sources, then import the outage log and
+    samples and print the resulting report.
+
+    With ``--dry-run``, the same import runs for real against a throwaway
+    database instead of the application's own, so the printed report is
+    trustworthy without writing anything an operator has not yet decided
+    to keep.
+    """
+    if not args.serial:
+        print("--serial is required (no device serial given)", file=sys.stderr)
+        return 2
+    device_config = next((d for d in settings.devices if d.serial == args.serial), None)
+    if device_config is None:
+        print(f"{args.serial!r} is not a configured device serial", file=sys.stderr)
+        return 2
+    if not args.source_tz:
+        print(
+            "--source-tz is required (the timezone outages.log was written in)",
+            file=sys.stderr,
+        )
+        return 2
+    if not args.samples and not args.outage_log:
+        # CLI-01 (qa-report-data-01.md): neither source was given, and
+        # there is no longer a container-path default to silently
+        # fall back to -- importing nothing is never useful, so this
+        # fails clearly instead of either crashing deeper in
+        # `make_snapshot` or quietly doing no work at all.
+        print(
+            "at least one of --samples or --outage-log is required (nothing was given to import)",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        snapshot = make_snapshot(
+            samples_db=Path(args.samples) if args.samples else None,
+            outage_log=Path(args.outage_log) if args.outage_log else None,
+            snapshot_dir=settings.data_dir / "import-tmp",
+        )
+    except SnapshotError as exc:
+        print(f"import snapshot failed: {exc}", file=sys.stderr)
+        return 2
+
+    now = datetime.now(UTC)
+    adapter_id = device_config.adapter_id or "generic"
+    if args.dry_run:
+        with tempfile.TemporaryDirectory() as scratch_dir:
+            report = _import_into(
+                db_path=Path(scratch_dir) / "dry-run.db",
+                serial=args.serial,
+                adapter_id=adapter_id,
+                source_tz=args.source_tz,
+                snapshot_samples_db=snapshot.samples_db,
+                snapshot_outage_log=snapshot.outage_log,
+                now=now,
+                record_run=False,
+            )
+        print(report.render())
+        print("(dry run: nothing was written to the application database)")
+    else:
+        report = _import_into(
+            db_path=settings.data_dir / "ecoflow-stats.db",
+            serial=args.serial,
+            adapter_id=adapter_id,
+            source_tz=args.source_tz,
+            snapshot_samples_db=snapshot.samples_db,
+            snapshot_outage_log=snapshot.outage_log,
+            now=now,
+            record_run=True,
+        )
+        print(report.render())
+    return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Parse arguments, validate configuration, then dispatch.
+
+    Returns the process exit code for the configuration-error path (``2``);
+    every subcommand returns its own real exit code.
+    """
+    args = _build_parser().parse_args(argv)
+    try:
+        settings = load_settings(os.environ)
+    except ConfigError as exc:
+        for error in exc.errors:
+            print(error, file=sys.stderr)
+        return 2
+
+    if args.command == "serve":
+        return _run_serve_command(settings)
+
+    if args.command == "check":
+        return asyncio.run(_run_check_command(settings, args.serial))
+
+    if args.command == "import":
+        return _run_import_command(settings, args)
+
+    if args.command == "recompute":
+        return _run_recompute_command(settings)
+
+    if args.command == "healthcheck":
+        return run_healthcheck(settings)
+
+    raise NotImplementedError(f"{args.command!r} is not implemented yet")
+
+
+__all__ = ["main"]

@@ -1,0 +1,34 @@
+# Example compose file: builds the image from this clone, no published
+# registry image required (deployment requirement "Compose Example
+# Builds From the Clone"). Copy to compose.yaml (or pass -f explicitly)
+# and a .env based on .env.example before running.
+services:
+  ecoflow-stats:
+    build: .
+    restart: unless-stopped
+    ports:
+      # Bind to a specific LAN address instead of every interface if this
+      # host is reachable from outside the LAN, e.g. "192.168.1.10:8080:8080".
+      - "8080:8080"
+    env_file: .env
+    # environment:
+    #   # Only needed when this container sits behind a reverse proxy
+    #   # that sets X-Forwarded-For; uncomment and name exactly that
+    #   # proxy's address/CIDR. Unset (the default), no X-Forwarded-For
+    #   # header is trusted, regardless of who sends it.
+    #   - ECOFLOW_STATS_TRUSTED_PROXIES=172.18.0.0/16
+    volumes:
+      - ecoflow-stats-data:/data
+      # Mount the legacy ecoflow-panel history read-only to import it once
+      # (Phase 9's `ecoflow-stats import`):
+      # - ~/.local/share/ecoflow:/import:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  ecoflow-stats-data:

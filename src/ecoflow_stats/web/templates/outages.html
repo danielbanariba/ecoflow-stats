@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}{{ t('outages.page.title') }} · {{ t('app.name') }}{% endblock %}
+{% block content %}
+<div class="page-head reveal">
+  <p class="eyebrow page-head__eyebrow">{{ t('outages.page.eyebrow').format(start=format_local_dt(view.range_start, tz)[:10], end=format_local_dt(view.range_end, tz)[:10]) }}</p>
+  <h1 class="page-head__title">{{ t('outages.page.title') }}</h1>
+</div>
+
+<section class="device-selector-section reveal" aria-label="{{ t('device.selector.label') }}">
+  {{ macros.device_selector(view.devices, t, action='/outages') }}
+</section>
+
+<section class="outages-summary-section" aria-label="{{ t('outages.summary.heading') }}">
+  <h2 class="reveal">{{ t('outages.summary.heading') }}</h2>
+  {#
+    `dt`/`dd` stay bare (no class, no extra wrapping tag) -- a contract
+    test locates each figure by an exact `<dt>label</dt><dd>value</dd>`
+    pair (`test_outages_page.py::_dd_value`); the `.stat-card` div
+    around each pair carries the visual card styling instead.
+  #}
+  <dl class="stat-grid mt-6">
+    <div class="stat-card reveal">
+      <dt>{{ t('outages.summary.count_label') }}</dt>
+      <dd>{{ view.summary.count }}</dd>
+    </div>
+    <div class="stat-card reveal">
+      <dt>{{ t('outages.summary.total_label') }}</dt>
+      <dd>{{ format_duration(view.summary.total_downtime_s, t) }}</dd>
+    </div>
+    <div class="stat-card reveal">
+      <dt>{{ t('outages.summary.longest_label') }}</dt>
+      <dd>
+        {% if view.summary.longest_s is not none %}{{ format_duration(view.summary.longest_s, t) }}{% else %}{{ t('common.unavailable') }}{% endif %}
+      </dd>
+    </div>
+    <div class="stat-card reveal">
+      <dt>{{ t('outages.summary.mean_label') }}</dt>
+      <dd>
+        {% if view.summary.mean_s is not none %}{{ format_duration(view.summary.mean_s, t) }}{% else %}{{ t('common.unavailable') }}{% endif %}
+      </dd>
+    </div>
+    <div class="stat-card reveal">
+      <dt>{{ t('outages.summary.brief_count_label') }}</dt>
+      <dd>{{ view.summary.brief_count }}</dd>
+    </div>
+    <div class="stat-card reveal">
+      <dt>{{ t('outages.summary.unknown_time_label') }}</dt>
+      <dd>{{ format_duration(view.summary.unknown_time_s, t) }}</dd>
+    </div>
+  </dl>
+</section>
+
+<section class="outages-heatmap-section" aria-label="{{ t('outages.heatmap.heading') }}">
+  <h2 class="reveal">{{ t('outages.heatmap.heading') }}</h2>
+  <div class="chart-card reveal mt-6">
+    <div class="chart-card__head">
+      <p class="text-muted text-caption">{{ t('outages.heatmap.aria_label') }}</p>
+      <div class="legend-row">
+        <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--unknown"></span>{{ t('outages.heatmap.table.count') }}</span>
+      </div>
+    </div>
+    {% call macros.chart_with_fallback('heatmap-chart', 'heatmap', t('outages.heatmap.aria_label'), t('chart.fallback_label'), json_target='heatmap-data', extra_class='chart--strip') %}
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">{{ t('outages.heatmap.table.weekday') }}</th>
+            {% for hour in range(24) %}
+            <th scope="col">{{ hour }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for day in range(7) %}
+          <tr>
+            <th scope="row">{{ t('weekday.' ~ day) }}</th>
+            {% for hour in range(24) %}
+            <td>{{ view.heatmap.matrix[day][hour] }}</td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+    {% set weekday_labels = [] %}
+    {% for day in range(7) %}{% set _ = weekday_labels.append(t('weekday.' ~ day)) %}{% endfor %}
+    <script type="application/json" id="heatmap-data">{{ {"matrix": view.heatmap.matrix, "weekday_labels": weekday_labels} | tojson }}</script>
+  </div>
+</section>
+
+<section class="outages-events-section" aria-label="{{ t('outages.events.heading') }}">
+  <h2 class="reveal">{{ t('outages.events.heading') }}</h2>
+  {% if view.events %}
+  <div class="table-scroll reveal mt-6">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">{{ t('outages.events.table.start') }}</th>
+          <th scope="col">{{ t('outages.events.table.end') }}</th>
+          <th scope="col">{{ t('outages.events.table.uncertainty') }}</th>
+          <th scope="col">{{ t('outages.events.table.source') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in view.events %}
+        <tr>
+          <td>{{ format_local_dt(row.start_ts, tz) }}</td>
+          <td>{% if row.end_ts is not none %}{{ format_local_dt(row.end_ts, tz) }}{% else %}{{ t('outages.table.ongoing') }}{% endif %}</td>
+          <td>
+            {% if row.start_uncertain %}<span class="badge badge--uncertain">{{ t('outages.uncertain.start') }}</span>{% endif %}
+            {% if row.end_uncertain %}<span class="badge badge--uncertain">{{ t('outages.uncertain.end') }}</span>{% endif %}
+            {% if not row.start_uncertain and not row.end_uncertain %}{{ t('outages.uncertain.none') }}{% endif %}
+          </td>
+          <td>{{ t('outages.source.' ~ row.source) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="reveal mt-6 text-muted">{{ t('outages.events.empty') }}</p>
+  {% endif %}
+</section>
+
+<section class="outages-gap-review-section" aria-label="{{ t('outages.gap_review.heading') }}">
+  <h2 class="reveal">{{ t('outages.gap_review.heading') }}</h2>
+  <p class="reveal mt-6 text-muted">{{ t('outages.gap_review.intro') }}</p>
+  {#
+    UI2-06 (qa-report-ui-02.md): `id` is this element's own OOB-swap
+    target -- `actions.decide_gap`/`decide_legacy`/`undo` append a
+    matching `hx-swap-oob="true"` fragment carrying the freshly
+    recomputed count to their normal row response, so deciding or
+    undoing a gap updates this text in the same response, with no
+    separate request and no page reload.
+  #}
+  <p id="gap-review-count" class="reveal text-muted">{{ t('outages.gap_review.count', count=view.gap_review_count).format(count=view.gap_review_count) }}</p>
+  <button
+    type="button"
+    class="btn btn--ghost gap-review-expand reveal"
+    hx-get="/outages/gaps?device={{ view.selected_device_id }}&from={{ view.range_start }}&to={{ view.range_end }}"
+    hx-target="#gap-review-list"
+    hx-swap="innerHTML"
+  >{{ t('outages.gap_review.expand_label') }}</button>
+  <div id="gap-review-list" class="gap-review-list" aria-live="polite"></div>
+</section>
+
+<section class="outages-legacy-review-section reveal" aria-label="{{ t('outages.legacy_review.heading') }}">
+  <h2 class="reveal">{{ t('outages.legacy_review.heading') }}</h2>
+  <p class="reveal mt-6 text-muted">{{ t('outages.legacy_review.intro') }}</p>
+  <p id="legacy-review-count" class="reveal text-muted">{{ t('outages.legacy_review.count', count=view.legacy_review_count).format(count=view.legacy_review_count) }}</p>
+  <button
+    type="button"
+    class="btn btn--ghost legacy-review-expand reveal"
+    hx-get="/outages/legacy?device={{ view.selected_device_id }}&from={{ view.range_start }}&to={{ view.range_end }}"
+    hx-target="#legacy-review-list"
+    hx-swap="innerHTML"
+  >{{ t('outages.legacy_review.expand_label') }}</button>
+  <div id="legacy-review-list" class="gap-review-list" aria-live="polite"></div>
+</section>
+
+<section class="outages-mains-strip-section" aria-label="{{ t('outages.mains_strip.heading') }}">
+  <h2 class="reveal">{{ t('outages.mains_strip.heading') }}</h2>
+  <div class="chart-card reveal mt-6">
+    <div class="chart-card__head">
+      <p class="text-muted text-caption">{{ t('outages.mains_strip.caption') }}</p>
+      <div class="legend-row">
+        <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--present"></span>{{ t('outages.state.present') }}</span>
+        <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--unknown"></span>{{ t('outages.state.unknown') }}</span>
+        <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--outage"></span>{{ t('outages.state.absent') }}</span>
+      </div>
+    </div>
+    {% call macros.chart_with_fallback('mains-strip-chart', 'mains-strip', t('outages.mains_strip.aria_label'), t('chart.fallback_label'), src=view.mains_strip_src, extra_class='chart--strip') %}
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">{{ t('outages.mains_strip.table.start') }}</th>
+            <th scope="col">{{ t('outages.mains_strip.table.end') }}</th>
+            <th scope="col">{{ t('outages.mains_strip.table.state') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for seg in view.mains_strip %}
+          <tr>
+            <td>{{ format_local_dt(seg.start_ts, tz) }}</td>
+            <td>{{ format_local_dt(seg.end_ts, tz) }}</td>
+            <td>{{ t('outages.state.' ~ seg.state) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+  </div>
+</section>
+
+<script src="/static/vendor/echarts.min.js" defer></script>
+{% endblock %}

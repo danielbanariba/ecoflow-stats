@@ -1,0 +1,61 @@
+{#
+  One legacy-outage review row (web-ui "Gap and Phantom Review Flow",
+  scenario "A suspected phantom can be un-flagged"): shows a
+  suspected-phantom entry's flag, lets the user mark it confirmed-real
+  (when `decision` is none), or shows the recorded verdict and an undo
+  form (when it is not).
+
+  Context: `entry` (a `storage.legacy.LegacyOutage`), `device_id`,
+  `tz`, `t`, `decision` (`None`, or `{"id": int, "verdict": str}`),
+  and `range_start`/`range_end` (UI2-06, qa-report-ui-02.md -- see
+  `gap_row.html`'s identical context note for the full reasoning).
+#}
+<article class="review-row reveal is-visible" data-legacy-start="{{ entry.start_ts }}">
+  <h3>
+    {{ format_local_dt(entry.start_ts, tz) }} –
+    {% if entry.end_ts is not none %}{{ format_local_dt(entry.end_ts, tz) }}{% else %}{{ t('outages.table.ongoing') }}{% endif %}
+  </h3>
+  <p class="review-row__decision">
+    {% if decision is not none and decision.verdict == 'real' %}
+      {{ t('outages.legacy_review.confirmed_real') }}
+    {% elif 'suspected_phantom' in entry.flags %}
+      {{ t('outages.legacy_review.suspected_phantom') }}
+    {% else %}
+      {{ t('outages.legacy_review.counted') }}
+    {% endif %}
+  </p>
+  {% if decision is none %}
+  <form
+    class="review-row__actions"
+    method="post"
+    action="/outages/legacy/{{ entry.start_ts }}/decision"
+    hx-post="/outages/legacy/{{ entry.start_ts }}/decision"
+    hx-target="closest article"
+    hx-swap="outerHTML"
+  >
+    <input type="hidden" name="device" value="{{ device_id }}">
+    <input type="hidden" name="verdict" value="real">
+    <input type="hidden" name="range_from" value="{{ range_start }}">
+    <input type="hidden" name="range_to" value="{{ range_end }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="btn btn--ghost">{{ t('outages.legacy_review.mark_real_button') }}</button>
+  </form>
+  {% else %}
+  <form
+    class="review-row__actions"
+    method="post"
+    action="/decisions/{{ decision.id }}/undo"
+    hx-post="/decisions/{{ decision.id }}/undo"
+    hx-target="closest article"
+    hx-swap="outerHTML"
+  >
+    <input type="hidden" name="device" value="{{ device_id }}">
+    <input type="hidden" name="target" value="legacy">
+    <input type="hidden" name="start" value="{{ entry.start_ts }}">
+    <input type="hidden" name="range_from" value="{{ range_start }}">
+    <input type="hidden" name="range_to" value="{{ range_end }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="btn btn--ghost">{{ t('outages.legacy_review.undo_button') }}</button>
+  </form>
+  {% endif %}
+</article>

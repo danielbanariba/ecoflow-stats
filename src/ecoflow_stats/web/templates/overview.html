@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}{{ t('nav.overview') }} · {{ t('app.name') }}{% endblock %}
+{% block content %}
+<div class="page-head reveal">
+  <p class="eyebrow page-head__eyebrow">{{ t('overview.page.eyebrow') }}</p>
+  <h1 class="page-head__title">{{ t('nav.overview') }}</h1>
+</div>
+
+<section class="device-selector-section reveal" aria-label="{{ t('device.selector.label') }}">
+  {{ macros.device_selector(view.devices, t) }}
+</section>
+
+<section
+  id="live-card"
+  class="bento mt-6"
+  aria-label="{{ t('nav.overview') }}"
+  hx-get="/partials/live?device={{ view.selected_device_id }}"
+  hx-trigger="every 30s"
+  hx-swap="innerHTML"
+>
+  {% include "partials/live.html" %}
+</section>
+{% endblock %}

@@ -1,0 +1,1381 @@
+/* ecoflow-stats visual language (design part 3, section 4; redesign01):
+   dark canvas, soft ambient glows, a glass sticky nav, and a bento grid
+   of translucent cards — ported from the approved mockup at
+   ecoflow-stats-worktrees/design-mockup/css/app.css (see that worktree's
+   DESIGN-TOKENS.md for the full token handoff spec). Semantic tokens
+   only, never a raw hex in a component rule below the `:root` block. */
+
+@font-face {
+  font-family: "Inter";
+  src: url("/static/fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: dark;
+
+  /* canvas + surfaces */
+  --canvas: #000000;
+  --canvas-raised: #0a0a0d;
+  --surface-1: rgba(255, 255, 255, 0.045);
+  --surface-2: rgba(255, 255, 255, 0.075);
+  --surface-hover: rgba(255, 255, 255, 0.095);
+  --border-subtle: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --border-focus: #0a84ff;
+
+  /* text */
+  --text-primary: rgba(245, 245, 247, 0.96);
+  --text-secondary: rgba(245, 245, 247, 0.78);
+  --text-muted: rgba(245, 245, 247, 0.58);
+  --text-faint: rgba(245, 245, 247, 0.4);
+
+  /* accent + semantic chart/status palette */
+  --accent: #0a84ff;
+  --accent-dim: rgba(10, 132, 255, 0.16);
+
+  --grid-present: #30d158;
+  --grid-present-dim: rgba(48, 209, 88, 0.14);
+  --outage: #ff6b4a;
+  --outage-strong: #ff453a;
+  --outage-dim: rgba(255, 107, 74, 0.14);
+  --battery-cool: #64d2ff;
+  --battery-warm: #30d158;
+  --solar: #ffd60a;
+  --solar-dim: rgba(255, 214, 10, 0.14);
+  --unknown: #9a9aa0;
+  --unknown-dim: rgba(154, 154, 160, 0.14);
+  /* F3 (orchestrator QA batch F): the grid chart's frequency series
+     shared `--unknown` (the same gray as the chart's own axis lines)
+     with its legend dot, so it was invisible against the gridlines
+     even before the axis-scale defect was fixed. A dedicated color
+     keeps voltage and frequency visually distinct from each other and
+     from the neutral/unknown palette. */
+  --frequency: #bf5af2;
+
+  /* ambient glows (blurred radial gradients, fixed behind content) */
+  --glow-green: radial-gradient(circle, rgba(48, 209, 88, 0.32) 0%, rgba(48, 209, 88, 0) 70%);
+  --glow-blue: radial-gradient(circle, rgba(10, 132, 255, 0.28) 0%, rgba(10, 132, 255, 0) 70%);
+  --glow-amber: radial-gradient(circle, rgba(255, 214, 10, 0.22) 0%, rgba(255, 214, 10, 0) 70%);
+  --glow-red: radial-gradient(circle, rgba(255, 107, 74, 0.24) 0%, rgba(255, 107, 74, 0) 70%);
+
+  /* radius */
+  --radius-lg: 28px;
+  --radius-md: 20px;
+  --radius-sm: 14px;
+  --radius-xs: 10px;
+  --radius-pill: 999px;
+
+  /* spacing (4px rhythm) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --space-9: 96px;
+
+  /* type scale */
+  --text-display: clamp(2rem, 1.6rem + 1.8vw, 3rem);
+  --text-h1: clamp(1.75rem, 1.5rem + 1vw, 2.25rem);
+  --text-h2: 1.375rem;
+  --text-h3: 1.125rem;
+  --text-body-lg: 1.1875rem;
+  --text-body: 1rem;
+  --text-caption: 0.875rem;
+  --text-micro: 0.75rem;
+
+  /* motion */
+  --ease-apple: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur-fast: 180ms;
+  --dur-base: 420ms;
+  --dur-slow: 650ms;
+  --dur-ring: 1200ms;
+
+  /* shadow / elevation */
+  --shadow-card: 0 1px 1px rgba(0, 0, 0, 0.3), 0 24px 48px -16px rgba(0, 0, 0, 0.65);
+  --shadow-float: 0 30px 90px -24px rgba(0, 0, 0, 0.75);
+
+  /* z-index scale */
+  --z-nav: 100;
+}
+
+/* ---------- Reset ---------- */
+* {
+  box-sizing: border-box;
+}
+
+body,
+h1,
+h2,
+h3,
+p,
+dl,
+dd,
+dt,
+figure {
+  margin: 0;
+}
+
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+a,
+button,
+select,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+/* ---------- Base ---------- */
+html {
+  background: var(--canvas);
+}
+
+body {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: var(--text-body);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  /* No background here on purpose: `html`'s canvas background must stay
+     the single opaque layer at the very bottom of the stack, or it paints
+     over the `z-index:-1` ambient glow below. */
+  min-height: 100dvh;
+  font-feature-settings: "tnum" 0;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Ambient background glows — fixed, behind everything, never intercepts clicks */
+.ambient {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ambient__spot {
+  position: absolute;
+  width: 60vmax;
+  height: 60vmax;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.55;
+}
+
+.ambient__spot--1 {
+  top: -18vmax;
+  left: -12vmax;
+  background: var(--glow-green);
+}
+
+.ambient__spot--2 {
+  top: 10vmax;
+  right: -20vmax;
+  background: var(--glow-blue);
+}
+
+.ambient__spot--3 {
+  bottom: -24vmax;
+  left: 18vmax;
+  background: var(--glow-amber);
+  opacity: 0.35;
+}
+
+.ambient__spot--red {
+  background: var(--glow-red);
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 1000;
+  background: var(--accent);
+  color: #fff;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-xs);
+}
+
+.skip-link:focus {
+  left: var(--space-4);
+  top: var(--space-4);
+}
+
+:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 3px;
+  border-radius: var(--radius-xs);
+}
+
+/* ---------- Typography ---------- */
+h1 {
+  font-size: var(--text-display);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+}
+
+h2 {
+  font-size: var(--text-h2);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  color: var(--text-primary);
+}
+
+h3 {
+  font-size: var(--text-h3);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+.eyebrow {
+  font-size: var(--text-micro);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.text-muted {
+  color: var(--text-muted);
+}
+
+.text-caption {
+  font-size: var(--text-caption);
+}
+
+.mt-6 {
+  margin-top: var(--space-6);
+}
+
+/* ---------- Layout shell ---------- */
+.shell {
+  max-width: 1280px;
+  margin-inline: auto;
+  padding-inline: var(--space-5);
+}
+
+@media (max-width: 480px) {
+  .shell {
+    padding-inline: var(--space-4);
+  }
+}
+
+main {
+  display: block;
+  padding-bottom: var(--space-9);
+}
+
+.page-head {
+  padding-top: var(--space-7);
+  padding-bottom: var(--space-6);
+}
+
+.page-head__eyebrow {
+  margin-bottom: var(--space-2);
+}
+
+.page-head__title {
+  margin-bottom: var(--space-2);
+}
+
+.page-head__lede {
+  max-width: 52ch;
+  color: var(--text-muted);
+  font-size: var(--text-body-lg);
+  margin: 0;
+}
+
+section + section {
+  margin-top: var(--space-8);
+}
+
+/* ---------- Glass nav ---------- */
+.glass-nav {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-nav);
+  background: rgba(8, 8, 11, 0.56);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  transition: background var(--dur-base) var(--ease-apple), border-color var(--dur-base) var(--ease-apple);
+}
+
+.glass-nav.is-scrolled {
+  background: rgba(8, 8, 11, 0.82);
+  border-bottom-color: var(--border-subtle);
+}
+
+.glass-nav__bar {
+  max-width: 1280px;
+  margin-inline: auto;
+  padding-inline: var(--space-5);
+  height: 64px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+}
+
+.glass-nav__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.glass-nav__brand-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: linear-gradient(135deg, var(--battery-cool), var(--battery-warm));
+  flex: none;
+}
+
+.glass-nav__links {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  flex: 1;
+}
+
+.glass-nav__links a {
+  text-decoration: none;
+  color: var(--text-muted);
+  font-size: var(--text-caption);
+  font-weight: 560;
+  padding: var(--space-2) 0;
+  position: relative;
+}
+
+.glass-nav__links a:hover {
+  color: var(--text-primary);
+}
+
+.glass-nav__links a[aria-current="page"] {
+  color: var(--text-primary);
+}
+
+.glass-nav__links a[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -9px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.glass-nav__lang {
+  display: flex;
+  gap: var(--space-1);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  padding: 3px;
+  margin: 0;
+}
+
+.glass-nav__lang-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  font-weight: 650;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-apple), color var(--dur-fast) var(--ease-apple);
+}
+
+.glass-nav__lang-btn[aria-current="true"] {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+@media (max-width: 680px) {
+  .glass-nav__bar {
+    gap: var(--space-3);
+    padding-inline: var(--space-4);
+  }
+  .glass-nav__links {
+    gap: var(--space-3);
+  }
+}
+
+/* Below ~520px, brand + lang pill alone eat most of the width, leaving
+   the nav links squeezed into an unreadable, clipped sliver. Wrap the
+   bar onto two rows instead: brand/lang on top, the link row on its own
+   full-width row below, where every link fits without scrolling or
+   clipping (fixes the mockup's own documented 375px nav defect). */
+@media (max-width: 520px) {
+  .glass-nav__bar {
+    flex-wrap: wrap;
+    height: auto;
+    padding-block: 14px;
+    row-gap: 12px;
+  }
+  .glass-nav__links {
+    order: 3;
+    flex: 1 1 100%;
+    gap: var(--space-5);
+  }
+}
+
+/* ---------- Buttons / controls ---------- */
+.btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border-radius: var(--radius-pill);
+  padding: 11px 20px;
+  font-size: var(--text-caption);
+  font-weight: 600;
+  min-height: 44px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: transform var(--dur-fast) var(--ease-apple), background var(--dur-fast) var(--ease-apple),
+    border-color var(--dur-fast) var(--ease-apple);
+}
+
+.btn--primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn--primary:hover {
+  background: #2b96ff;
+}
+
+.btn--ghost {
+  background: var(--surface-1);
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
+}
+
+.btn--ghost:hover {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+
+.btn:active {
+  transform: scale(0.97);
+}
+
+.field-label {
+  font-size: var(--text-caption);
+  font-weight: 560;
+  color: var(--text-muted);
+}
+
+.select-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.select-wrap::after {
+  content: "";
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  border-right: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  transform: translateY(-65%) rotate(45deg);
+  pointer-events: none;
+}
+
+.select,
+.text-input {
+  appearance: none;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-caption);
+  font-weight: 560;
+  min-height: 44px;
+  padding: 0 40px 0 16px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-apple), background var(--dur-fast) var(--ease-apple);
+}
+
+.text-input {
+  cursor: text;
+  padding: 0 16px;
+}
+
+.select:hover,
+.text-input:hover {
+  border-color: var(--border-strong);
+}
+
+.device-selector {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.device-selector-section {
+  display: flex;
+  justify-content: flex-start;
+}
+
+/* ---------- Bento grid ---------- */
+.bento {
+  display: grid;
+  /* F1 (orchestrator QA batch F): a plain `1fr` track cannot shrink
+     below its content's own intrinsic width -- the same UI2-01 defect
+     `.stat-grid` already had below, just not yet exercised here by a
+     long enough `.stat-tile__value`. `minmax(0, 1fr)` lets each track
+     shrink to its own share of the row instead of forcing the whole
+     bento (and the page) wider than the viewport. */
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--space-5);
+}
+
+.tile {
+  position: relative;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  transition: transform var(--dur-base) var(--ease-apple), border-color var(--dur-base) var(--ease-apple),
+    background var(--dur-base) var(--ease-apple), box-shadow var(--dur-base) var(--ease-apple);
+}
+
+.tile:hover {
+  transform: translateY(-3px);
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  box-shadow: var(--shadow-float);
+}
+
+.tile--span-4 {
+  grid-column: span 4;
+}
+
+.tile--span-12 {
+  grid-column: span 12;
+}
+
+.tile--row-2 {
+  grid-row: span 2;
+  display: flex;
+  flex-direction: column;
+}
+
+/* F7 (orchestrator QA batch F): the battery page's top bento paired
+   one `.tile--row-2` ("Right now") with two plain single-row tiles
+   (state of health, cycles) -- CSS Grid only grows a row to fit items
+   actually placed in it, so the two short tiles left a tall empty
+   block under themselves, the same height as "Right now"'s own second
+   row. Adding `.tile--row-2` to those two as well makes every tile in
+   the row span the same two rows (grid's default `align-items:
+   stretch` then fills that full height for all three); `.tile--center`
+   vertically centers each short label/value pair within its own
+   now-taller card instead of leaving it pinned to the top with empty
+   space below -- balance without an inline style. */
+.tile--center {
+  justify-content: center;
+  gap: var(--space-5);
+}
+
+@media (max-width: 900px) {
+  .bento {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .tile--span-4 {
+    grid-column: span 2;
+  }
+  /* F1 follow-up (orchestrator QA batch F): this query narrows `.bento`
+     to 2 explicit columns and remaps `.tile--span-4` to fit them, but
+     left `.tile--span-12` (the overview/battery hero tile) still
+     asking for a 12-column span. A span wider than the explicit grid
+     makes the grid auto-generate implicit columns sized by content
+     instead of the intended `1fr` split, which starves the two real
+     columns down to a sliver -- collapsing whichever stat tile lands
+     there (observed: the overview's "State of health" value clipped
+     to 0 width at 768px). Capping the hero to the same 2 columns
+     keeps every tile inside the explicit grid, matching the pattern
+     the 560px query below already uses for both classes together. */
+  .tile--span-12 {
+    grid-column: span 2;
+  }
+  .tile--row-2 {
+    grid-row: auto;
+  }
+}
+
+@media (max-width: 560px) {
+  .bento {
+    grid-template-columns: 1fr;
+    gap: var(--space-4);
+  }
+  .tile--span-4,
+  .tile--span-12 {
+    grid-column: 1;
+  }
+  .tile {
+    padding: var(--space-5);
+  }
+}
+
+/* ---------- Hero tile (overview grid status + battery ring) ---------- */
+.hero-tile {
+  justify-content: space-between;
+  gap: var(--space-6);
+}
+
+.hero-tile__top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+}
+
+.hero-tile__status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.status-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.status-row--hero {
+  gap: var(--space-3);
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--unknown);
+  flex: none;
+}
+
+.status-dot--lg {
+  width: 16px;
+  height: 16px;
+  margin-right: 2px;
+}
+
+.status-dot--present {
+  background: var(--grid-present);
+  animation: breathe 2.6s ease-in-out infinite;
+}
+
+.status-dot--absent {
+  background: var(--outage);
+  animation: breathe-outage 1.6s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(48, 209, 88, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 9px rgba(48, 209, 88, 0);
+  }
+}
+
+@keyframes breathe-outage {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 107, 74, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 0 9px rgba(255, 107, 74, 0);
+  }
+}
+
+.hero-tile__headline {
+  font-size: clamp(2rem, 1.6rem + 2.4vw, 3.4rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  color: var(--text-primary);
+}
+
+.hero-tile__headline--present {
+  color: var(--grid-present);
+}
+
+.hero-tile__headline--absent {
+  color: var(--outage);
+}
+
+.hero-tile__headline--unknown {
+  color: var(--unknown);
+}
+
+.hero-tile__device {
+  text-align: right;
+}
+
+@media (max-width: 560px) {
+  .hero-tile__device {
+    text-align: left;
+  }
+  .hero-tile__metrics {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------- Hero power-flow metrics (UI-02/UI-04, overview) ---------- */
+.hero-tile__metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-4);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.metric__label {
+  font-size: var(--text-micro);
+  color: var(--text-muted);
+  font-weight: 560;
+}
+
+.metric__value {
+  font-size: var(--text-h3);
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.metric__value--solar {
+  color: var(--solar);
+}
+
+.metric__value--battery {
+  color: var(--battery-warm);
+}
+
+.hero-tile__battery {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.hero-tile__battery-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.value-lg {
+  font-size: 1.5rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.inline-badge-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: var(--text-caption);
+}
+
+/* ---------- Activity ring (battery), server-rendered ---------- */
+.ring-wrap {
+  position: relative;
+  width: 152px;
+  height: 152px;
+  flex: none;
+}
+
+.ring-wrap svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.ring-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.08);
+}
+
+.ring-progress {
+  fill: none;
+  stroke-linecap: round;
+  transition: stroke-dashoffset var(--dur-ring) var(--ease-apple);
+}
+
+.ring-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  text-align: center;
+}
+
+.ring-center__value {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.ring-center__label {
+  font-size: var(--text-micro);
+  color: var(--text-muted);
+  font-weight: 560;
+}
+
+/* ---------- Stat tiles (battery "right now" snapshot) ---------- */
+.stat-tile__label {
+  font-size: var(--text-micro);
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  margin-bottom: var(--space-3);
+}
+
+.stat-tile__value {
+  font-size: var(--text-display);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  line-height: 1;
+  /* F1 (orchestrator QA batch F): dropped `white-space: nowrap` --
+     paired with `.bento`'s own `minmax(0, 1fr)` fix above, a long
+     duration value now wraps at a word boundary instead of forcing
+     the bento (and the page) wider than the viewport. */
+}
+
+.stat-tile__sub {
+  margin-top: var(--space-2);
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.stat-tile--accent-battery .stat-tile__value {
+  color: var(--battery-warm);
+}
+
+.stat-tile--accent-outage .stat-tile__value {
+  color: var(--outage);
+}
+
+.stat-tile--accent-grid .stat-tile__value {
+  color: var(--grid-present);
+}
+
+/* ---------- Summary stat grid (outages page) ---------- */
+/* F1 (orchestrator QA batch F, regression from 75a1df2): the previous
+   fixed `repeat(6, ...)` / `repeat(3, ...)` / `repeat(2, ...)` step
+   function left narrow fixed-width cards with empty track space on
+   the right whenever a page had fewer than 6 cards (energy: 5,
+   grid: 4), and squeezed a long value ("118.8 - 121.2 V", a
+   formatted period date) into a column too narrow for it, which the
+   old `nowrap` + `text-overflow: ellipsis` below then clipped instead
+   of letting it wrap.
+
+   `repeat(auto-fit, minmax(11rem, 1fr))` fits as many 11rem-minimum
+   cards per row as the container allows and stretches them to fill
+   it exactly -- never fewer-than-full-width cards with dead space,
+   never a column forced narrower than 11rem. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--space-4);
+}
+
+@media (max-width: 560px) {
+  .stat-grid {
+    gap: var(--space-3);
+  }
+}
+
+.stat-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  transition: transform var(--dur-base) var(--ease-apple), background var(--dur-base) var(--ease-apple);
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  background: var(--surface-hover);
+}
+
+/* `dt`/`dd` stay bare (no class) inside `.stat-card` -- a contract test
+   (`test_outages_page.py::_dd_value`) locates each summary figure by an
+   exact `<dt>label</dt><dd>value</dd>` pair, so the visual styling
+   below is attached by tag, scoped to `.stat-grid`, rather than by a
+   class on the `dt`/`dd` elements themselves. */
+/* A secondary figure under a stat value (e.g. a period's cost), on its
+   own line so a long value never wraps around a dangling separator. */
+.stat-grid dd .stat-card__sub {
+  display: block;
+  margin-top: var(--space-2);
+  font-size: var(--text-caption);
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--text-muted);
+}
+
+.stat-grid dt {
+  font-size: var(--text-micro);
+  color: var(--text-muted);
+  font-weight: 560;
+  margin-bottom: var(--space-2);
+}
+
+.stat-grid dd {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  /* F1 (orchestrator QA batch F): a value is never clipped or
+     ellipsized -- `auto-fit, minmax(11rem, 1fr)` above gives every
+     card a sane minimum width, and a value that still does not fit
+     wraps instead, at a normal word/space boundary (around the
+     " - "/" / " in a range, or between "N" and its unit) -- never
+     mid-word, since nothing here sets `overflow-wrap: break-word` or
+     `word-break`. Replaces the previous `nowrap` + `text-overflow:
+     ellipsis` pair, which this batch's QA caught truncating real
+     values ("118.8 - 121....", "2026-10-...") instead of just the
+     pathological case UI2-01 introduced it for. */
+}
+
+/* ---------- Chart cards ---------- */
+.chart-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  box-shadow: var(--shadow-card);
+}
+
+.chart-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+  flex-wrap: wrap;
+}
+
+.chart-card__head p {
+  margin: 0;
+}
+
+.chart-figure {
+  margin: 0;
+}
+
+.chart {
+  width: 100%;
+  height: 320px;
+}
+
+.chart--strip {
+  height: 140px;
+}
+
+.legend-row {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-chip__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--text-muted);
+}
+
+.legend-chip__dot--present {
+  background: var(--grid-present);
+}
+
+.legend-chip__dot--outage {
+  background: var(--outage);
+}
+
+.legend-chip__dot--unknown {
+  background: var(--unknown);
+}
+
+.legend-chip__dot--frequency {
+  background: var(--frequency);
+}
+
+/* F4 (orchestrator QA batch F): the battery trend chart's legend
+   markup already referenced these two modifiers (`battery.html`), but
+   neither was ever defined -- both dots fell back to the base
+   `.legend-chip__dot`'s gray `--text-muted`, matching neither the
+   cycles line (`--solar`) nor the state-of-health line
+   (`--battery-warm`) it sits beside. */
+.legend-chip__dot--solar {
+  background: var(--solar);
+}
+
+.legend-chip__dot--warm {
+  background: var(--battery-warm);
+}
+
+/* ---------- Details fallback (data tables for a11y / no-JS) ---------- */
+.chart-fallback {
+  margin-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--space-3);
+}
+
+.chart-fallback summary {
+  cursor: pointer;
+  font-size: var(--text-caption);
+  font-weight: 600;
+  color: var(--text-muted);
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+}
+
+.chart-fallback summary::-webkit-details-marker {
+  display: none;
+}
+
+.chart-fallback summary::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--dur-fast) var(--ease-apple);
+}
+
+.chart-fallback[open] summary::before {
+  transform: rotate(45deg);
+}
+
+.chart-fallback summary:hover {
+  color: var(--text-primary);
+}
+
+.fallback-body {
+  margin-top: var(--space-3);
+  max-height: 360px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+}
+
+/* ---------- Data tables ---------- */
+table {
+  font-size: var(--text-caption);
+  background: transparent;
+}
+
+caption {
+  text-align: left;
+  padding: var(--space-3) var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+}
+
+th,
+td {
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+thead th {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: var(--text-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: rgba(255, 255, 255, 0.02);
+  position: sticky;
+  top: 0;
+}
+
+tbody tr {
+  transition: background var(--dur-fast) var(--ease-apple);
+}
+
+tbody tr:hover {
+  background: var(--surface-1);
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table-scroll {
+  overflow-x: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+}
+
+/* ---------- Badges ---------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-micro);
+  font-weight: 650;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+
+.badge--stale {
+  background: var(--outage-dim);
+  color: var(--outage);
+}
+
+.badge--uncertain {
+  background: var(--solar-dim);
+  color: var(--solar);
+}
+
+.badge--ok {
+  background: var(--grid-present-dim);
+  color: var(--grid-present);
+}
+
+.badge--neutral {
+  background: var(--unknown-dim);
+  color: var(--unknown);
+}
+
+/* ---------- Empty / stale states ---------- */
+.empty-state {
+  padding: var(--space-6);
+  text-align: center;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+}
+
+.empty-state__title {
+  color: var(--text-primary);
+  font-weight: 650;
+  margin-bottom: var(--space-2);
+}
+
+.empty-state__body {
+  margin: 0;
+}
+
+/* ---------- Gap / legacy review rows ---------- */
+.gap-review-list {
+  margin-top: var(--space-4);
+  display: grid;
+  gap: var(--space-3);
+}
+
+.review-row {
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  display: grid;
+  gap: var(--space-3);
+}
+
+.review-row__evidence {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+}
+
+.review-row__evidence dt {
+  font-size: var(--text-micro);
+  color: var(--text-muted);
+}
+
+.review-row__evidence dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-weight: 560;
+}
+
+.review-row__actions {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.review-row__decision {
+  margin: 0;
+  color: var(--text-primary);
+  font-weight: 560;
+}
+
+/* ---------- Login ---------- */
+.login-shell {
+  max-width: 28rem;
+}
+
+.login-form {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-6);
+}
+
+.login-error {
+  color: var(--outage);
+  font-weight: 560;
+}
+
+.login-form label {
+  display: block;
+  margin-bottom: var(--space-2);
+}
+
+.login-form .text-input {
+  width: 100%;
+}
+
+/* ---------- Motion: scroll reveal ---------- */
+/* P-02 (orchestrator QA): `.reveal` used to start at `opacity: 0`
+   unconditionally, so a visitor with JavaScript disabled or failing
+   (the only actor that ever adds `.is-visible`) saw permanently
+   invisible content -- `app.js` is the only thing that ever un-hides
+   it. The hidden state is now gated on `.js`, a class `app.js` adds to
+   `<html>` as its very first statement (CSP-safe: no inline script);
+   without JS, `<html>` never gets that class, so `.reveal` content
+   stays at its default, fully visible state. With JS, the same
+   fade-up entrance and the reduced-motion override below still apply,
+   unchanged. */
+.js .reveal {
+  opacity: 0;
+  transform: translateY(22px);
+  transition: opacity var(--dur-slow) var(--ease-apple), transform var(--dur-slow) var(--ease-apple);
+}
+
+.js .reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1;
+    transform: none;
+  }
+
+  .status-dot--present,
+  .status-dot--absent {
+    animation: none;
+  }
+
+  .tile:hover {
+    transform: none;
+  }
+}
+
+/* ---------- HTMX error banner (UI-15) ---------- */
+.htmx-error-banner {
+  position: fixed;
+  top: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  max-width: calc(100vw - var(--space-6));
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-pill);
+  background: var(--outage-strong);
+  color: #fff;
+  font-size: var(--text-caption);
+  font-weight: 600;
+  text-align: center;
+  box-shadow: var(--shadow-card);
+}

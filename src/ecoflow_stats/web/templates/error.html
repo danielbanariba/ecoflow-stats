@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ error_title }} · {{ t('app.name') }}{% endblock %}
+{% block content %}
+<div class="page-head reveal">
+  <h1 class="page-head__title">{{ error_title }}</h1>
+</div>
+
+<section class="tile tile--span-12 empty-state reveal" aria-label="{{ error_title }}">
+  <p class="empty-state__body">{{ error_message }}</p>
+  <p class="empty-state__body"><a href="/">{{ t('error.back_home') }}</a></p>
+</section>
+{% endblock %}

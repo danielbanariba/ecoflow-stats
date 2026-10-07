@@ -1,0 +1,97 @@
+{#
+  One gap-review row (web-ui "Gap and Phantom Review Flow", scenario "A
+  gap can be reviewed and resolved"): the before/after evidence
+  `outages.evidence.make_gap` already computed, plus confirm/reject
+  (when `decision` is none) or the recorded verdict and an undo form
+  (when it is not).
+
+  Context: `gap` (an `outages.model.Gap`), `device_id`, `tz`, `t`,
+  `decision` (`None`, or `{"id": int, "verdict": str}`), and
+  `range_start`/`range_end` (the review list's own currently
+  selected range -- UI2-06, qa-report-ui-02.md: carried as hidden
+  `range_from`/`range_to` fields on every form below so
+  `decide_gap`/`undo` can recompute and OOB-swap the pending count
+  for the exact range the page has open, not a hardcoded default).
+#}
+<article class="review-row gap-card reveal is-visible" data-gap-start="{{ gap.start_ts }}">
+  <h3>
+    {{ format_local_dt(gap.start_ts, tz) }} –
+    {% if gap.end_ts is not none %}{{ format_local_dt(gap.end_ts, tz) }}{% else %}{{ t('outages.table.ongoing') }}{% endif %}
+  </h3>
+  <dl class="review-row__evidence">
+    <div>
+      <dt>{{ t('outages.gap_review.evidence.cause') }}</dt>
+      <dd>{{ t('outages.gap_review.evidence.cause_value').format(cause=gap.cause.replace('_', ' ')) }}</dd>
+    </div>
+    <div>
+      <dt>{{ t('outages.gap_review.evidence.state_before') }}</dt>
+      <dd>{% if gap.state_before is not none %}{{ t('outages.state.' ~ gap.state_before) }}{% else %}{{ t('common.unavailable') }}{% endif %}</dd>
+    </div>
+    <div>
+      <dt>{{ t('outages.gap_review.evidence.state_after') }}</dt>
+      <dd>{% if gap.state_after is not none %}{{ t('outages.state.' ~ gap.state_after) }}{% else %}{{ t('common.unavailable') }}{% endif %}</dd>
+    </div>
+    <div>
+      <dt>{{ t('outages.gap_review.evidence.soc_before') }}</dt>
+      <dd>{% if gap.soc_before is not none %}{{ gap.soc_before }}{% else %}{{ t('common.unavailable') }}{% endif %}</dd>
+    </div>
+    <div>
+      <dt>{{ t('outages.gap_review.evidence.soc_after') }}</dt>
+      <dd>{% if gap.soc_after is not none %}{{ gap.soc_after }}{% else %}{{ t('common.unavailable') }}{% endif %}</dd>
+    </div>
+    <div>
+      <dt>{{ t('outages.gap_review.evidence.power_evidence') }}</dt>
+      <dd>{{ t('outages.gap_review.power_evidence.' ~ gap.evidence) }}</dd>
+    </div>
+  </dl>
+  {% if decision is none %}
+  <div class="review-row__actions">
+    <form
+      method="post"
+      action="/outages/gaps/{{ gap.start_ts }}/decision"
+      hx-post="/outages/gaps/{{ gap.start_ts }}/decision"
+      hx-target="closest article"
+      hx-swap="outerHTML"
+    >
+      <input type="hidden" name="device" value="{{ device_id }}">
+      <input type="hidden" name="verdict" value="outage">
+      <input type="hidden" name="range_from" value="{{ range_start }}">
+      <input type="hidden" name="range_to" value="{{ range_end }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="btn btn--ghost">{{ t('outages.gap_review.confirm_button') }}</button>
+    </form>
+    <form
+      method="post"
+      action="/outages/gaps/{{ gap.start_ts }}/decision"
+      hx-post="/outages/gaps/{{ gap.start_ts }}/decision"
+      hx-target="closest article"
+      hx-swap="outerHTML"
+    >
+      <input type="hidden" name="device" value="{{ device_id }}">
+      <input type="hidden" name="verdict" value="no_outage">
+      <input type="hidden" name="range_from" value="{{ range_start }}">
+      <input type="hidden" name="range_to" value="{{ range_end }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="btn btn--ghost">{{ t('outages.gap_review.reject_button') }}</button>
+    </form>
+  </div>
+  {% else %}
+  <p class="review-row__decision">{{ t('outages.gap_review.decided.' ~ decision.verdict) }}</p>
+  <form
+    class="review-row__actions"
+    method="post"
+    action="/decisions/{{ decision.id }}/undo"
+    hx-post="/decisions/{{ decision.id }}/undo"
+    hx-target="closest article"
+    hx-swap="outerHTML"
+  >
+    <input type="hidden" name="device" value="{{ device_id }}">
+    <input type="hidden" name="target" value="gap">
+    <input type="hidden" name="start" value="{{ gap.start_ts }}">
+    <input type="hidden" name="range_from" value="{{ range_start }}">
+    <input type="hidden" name="range_to" value="{{ range_end }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="btn btn--ghost">{{ t('outages.gap_review.undo_button') }}</button>
+  </form>
+  {% endif %}
+</article>

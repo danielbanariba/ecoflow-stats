@@ -402,10 +402,15 @@ def battery_page(
         # identical guard above.
         return render_error_page(request, 400)
 
-    samples = [
-        (row.ts, row.reading)
-        for row in ctx.sample_store.between(selected_id, range_start, range_end)
-    ]
+    # UI2-05 (qa-report-ui-02.md): this page took ~713ms against this
+    # app's own seeded history -- `SampleStore.between` built a full
+    # 19-field `Reading` for every one of 64,781 rows even though the
+    # page only ever reads `.soc` from the series and a full `Reading`
+    # from the single latest sample. `soc_between`/`latest_in_range`
+    # (new on the concrete store, kept lean on purpose) fetch exactly
+    # that shape instead.
+    soc_samples = list(ctx.sample_store.soc_between(selected_id, range_start, range_end))
+    latest_sample = ctx.sample_store.latest_in_range(selected_id, range_start, range_end)
     outage_events = [
         event
         for event in ctx.outage_store.events(selected_id, range_start, range_end)
@@ -431,7 +436,8 @@ def battery_page(
         selected_device_id=selected_id,
         range_start=range_start,
         range_end=range_end,
-        samples=samples,
+        soc_samples=soc_samples,
+        latest_reading=latest_sample.reading if latest_sample is not None else None,
         outage_events=outage_events,
         trend_days=trend_days,
         series_src=f"/api/v1/battery/series?device={selected_id}&from={range_start}&to={range_end}",

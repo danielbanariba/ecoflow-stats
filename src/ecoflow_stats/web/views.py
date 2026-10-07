@@ -20,8 +20,8 @@ from ecoflow_stats.battery.stats import (
     battery_power_status,
     battery_trend,
     bucket_charge_history,
-    charge_history,
     depth_of_discharge,
+    soc_history,
     summarize_battery_trend,
 )
 from ecoflow_stats.timeutil import duration_parts, local_day
@@ -575,7 +575,8 @@ def build_battery_view_model(
     selected_device_id: int,
     range_start: int,
     range_end: int,
-    samples: Sequence[tuple[int, Reading]],
+    soc_samples: Sequence[tuple[int, int | None]],
+    latest_reading: Reading | None,
     outage_events: Sequence[Event],
     trend_days: Sequence[DailyBatteryTrend],
     series_src: str,
@@ -587,11 +588,18 @@ def build_battery_view_model(
     `build_outage_event_rows`'s own convention) so both the
     depth-of-discharge and autonomy tables show the latest outage
     first without scrolling.
+
+    UI2-05 (qa-report-ui-02.md): takes `soc_samples` (lean ``(ts,
+    soc)`` pairs) and the range's own `latest_reading` separately,
+    rather than one `Sequence[tuple[int, Reading]]` of every sample --
+    this function only ever reads `.soc` from the series and a full
+    `Reading` from the single latest sample, so the caller
+    (`web.routes.pages.battery_page`) can fetch exactly that lean
+    shape from storage instead of building a full `Reading` per row
+    for a history that can run into the tens of thousands of samples.
     """
     ordered_events = sorted(outage_events, key=lambda event: event.start_ts, reverse=True)
-    sorted_samples = sorted(samples, key=lambda pair: pair[0])
-    latest_reading = sorted_samples[-1][1] if sorted_samples else None
-    charge_points = charge_history(samples)
+    charge_points = soc_history(soc_samples)
     # DATA-04/UI-14: the fallback <details> table is bucketed/bounded
     # (qa-report-data-01.md/qa-report-ui-01.md) -- the chart's own live
     # data source (`series_src`) and `current_soc` below both keep

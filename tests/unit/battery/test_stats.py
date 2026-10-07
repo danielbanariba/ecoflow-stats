@@ -18,6 +18,7 @@ from ecoflow_stats.battery.stats import (
     bucket_charge_history,
     charge_history,
     depth_of_discharge,
+    soc_history,
     summarize_battery_trend,
 )
 from ecoflow_stats.devices.reading import Reading
@@ -41,6 +42,24 @@ def test_charge_history_reflects_recorded_samples_in_order() -> None:
     assert history == [
         ChargePoint(ts=0, soc=95),
         ChargePoint(ts=300, soc=88),
+        ChargePoint(ts=600, soc=80),
+    ]
+
+
+def test_soc_history_reflects_recorded_samples_in_order() -> None:
+    """UI2-05 (qa-report-ui-02.md): `soc_history` is `charge_history`'s
+    lean sibling for a caller that already queried only `(ts, soc)`
+    pairs (`storage.samples.SampleStore.soc_between`) instead of full
+    `Reading`s. Same Pass-1 as `charge_history`'s own test above: a
+    defect here that trusted an unsorted caller-supplied batch would
+    show the wrong state of charge at the wrong time."""
+    points = [(600, 80), (0, 95), (300, None)]
+
+    history = soc_history(points)
+
+    assert history == [
+        ChargePoint(ts=0, soc=95),
+        ChargePoint(ts=300, soc=None),
         ChargePoint(ts=600, soc=80),
     ]
 

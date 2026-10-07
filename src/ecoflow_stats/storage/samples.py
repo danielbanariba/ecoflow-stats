@@ -85,6 +85,38 @@ class SampleStore:
         ).fetchall()
         return (_row_to_sample(row) for row in rows)
 
+    def soc_between(self, device_id: int, start: int, end: int) -> Iterator[tuple[int, int | None]]:
+        """Yield ``(ts, soc)`` pairs for a device's samples within
+        ``[start, end]``, in timestamp order (UI2-05, qa-report-ui-
+        02.md: the battery page took ~713ms against this app's own
+        seeded history, 63% of it `between()`'s own per-row cost --
+        building a full 19-field `Reading` for every one of 64,781
+        rows even though the page only ever reads `.soc` from nearly
+        all of them, for its bucketed charge-history series and
+        fallback table). Selects only the two columns it needs rather
+        than ``SELECT *``, and skips `_row_to_sample`'s `Reading`
+        construction entirely."""
+        rows = self._conn.execute(
+            "SELECT ts, soc FROM samples WHERE device_id = ? AND ts BETWEEN ? AND ? ORDER BY ts",
+            (device_id, start, end),
+        ).fetchall()
+        return ((row["ts"], row["soc"]) for row in rows)
+
+    def latest_in_range(self, device_id: int, start: int, end: int) -> StoredSample | None:
+        """Return the most recent sample within ``[start, end]``, or
+        ``None`` if the range has no sample (UI2-05 sibling to
+        `soc_between`): `latest()` has no range bound at all, so it
+        cannot stand in for "the latest reading the currently selected
+        range actually contains" -- the one full `Reading` the battery
+        page's power-status card still needs, alongside the lean
+        `soc_between` series."""
+        row = self._conn.execute(
+            "SELECT * FROM samples WHERE device_id = ? AND ts BETWEEN ? AND ?"
+            " ORDER BY ts DESC LIMIT 1",
+            (device_id, start, end),
+        ).fetchone()
+        return _row_to_sample(row) if row is not None else None
+
     def add_batch(
         self,
         device_id: int,

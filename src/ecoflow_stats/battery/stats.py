@@ -64,6 +64,21 @@ def charge_history(samples: Sequence[tuple[int, Reading]]) -> list[ChargePoint]:
     ]
 
 
+def soc_history(points: Sequence[tuple[int, int | None]]) -> list[ChargePoint]:
+    """Same ordering contract as `charge_history`, for a caller that
+    already queried only ``(ts, soc)`` pairs rather than full
+    `Reading`s (UI2-05, qa-report-ui-02.md: see
+    `storage.samples.SampleStore.soc_between`'s own docstring for the
+    full root-cause measurement). Still pure core: takes exactly the
+    plain tuples its caller already has, no `Reading` import needed
+    here at all.
+
+    Sorts defensively by ``ts``, matching `charge_history`, so an
+    out-of-order caller still gets a correctly ordered series.
+    """
+    return [ChargePoint(ts=ts, soc=soc) for ts, soc in sorted(points, key=lambda pair: pair[0])]
+
+
 _DEFAULT_MAX_FALLBACK_ROWS = 200
 
 
@@ -264,5 +279,6 @@ __all__ = [
     "bucket_charge_history",
     "charge_history",
     "depth_of_discharge",
+    "soc_history",
     "summarize_battery_trend",
 ]

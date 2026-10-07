@@ -96,6 +96,58 @@ def test_between_returns_only_samples_in_the_inclusive_range_in_order(
         db.close()
 
 
+def test_soc_between_returns_only_the_ts_and_soc_of_samples_in_range(
+    tmp_path: Path,
+) -> None:
+    """UI2-05 (qa-report-ui-02.md): `soc_between` exists so the battery
+    page can read a charge-history series without `between()`'s per-
+    row `Reading` construction cost. Pass-2 target: a `soc_between`
+    that forgot the inclusive-range `WHERE` clause (for example,
+    copy-pasting `between`'s query but dropping a bound) would include
+    a sample outside `[100, 150]` here, or `SELECT *`-ing instead of
+    the lean two columns would still work for this assertion but not
+    for the one below it, which checks the shape is really `(ts,
+    soc)` pairs, not full rows."""
+    store, db, device_id = _store(tmp_path)
+    try:
+        for ts in (50, 100, 150, 200):
+            store.add(device_id, ts, 1, Reading(soc=ts // 10, grid_v=120.0))
+        result = list(store.soc_between(device_id, 100, 150))
+        assert result == [(100, 10), (150, 15)]
+    finally:
+        db.close()
+
+
+def test_latest_in_range_ignores_samples_outside_the_requested_range(
+    tmp_path: Path,
+) -> None:
+    """UI2-05: `latest()` has no range bound at all, so it cannot serve
+    the battery page's own "latest sample in the range actually being
+    viewed" need -- a range ending before the device's most recent
+    sample must not surface that out-of-range sample as if it were in
+    range. Pass-2 target: dropping the `ts BETWEEN` clause (reverting
+    to `latest()`'s unbounded query) turns this red, returning the
+    `ts=200` sample for a `[0, 150]` request."""
+    store, db, device_id = _store(tmp_path)
+    try:
+        for ts in (50, 100, 200):
+            store.add(device_id, ts, 1, Reading(soc=ts // 10))
+        result = store.latest_in_range(device_id, 0, 150)
+        assert result is not None
+        assert result.ts == 100
+    finally:
+        db.close()
+
+
+def test_latest_in_range_is_none_when_the_range_has_no_sample(tmp_path: Path) -> None:
+    store, db, device_id = _store(tmp_path)
+    try:
+        store.add(device_id, 50, 1, Reading(soc=5))
+        assert store.latest_in_range(device_id, 1_000, 2_000) is None
+    finally:
+        db.close()
+
+
 def test_add_batch_inserts_every_row_once(tmp_path: Path) -> None:
     store, db, device_id = _store(tmp_path)
     try:

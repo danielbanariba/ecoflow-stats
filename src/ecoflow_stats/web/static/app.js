@@ -119,6 +119,41 @@ function initRings() {
   hosts.forEach((host) => io.observe(host));
 }
 
+// ---- UI2-04 (qa-report-ui-02.md): the language switch posts a
+// boosted form that swaps the entire <body>, so the button a
+// keyboard user just activated is destroyed and recreated -- the
+// browser's default response to a focused element leaving the DOM is
+// to drop focus onto <body> itself, silently stranding that user at
+// the very top of the page with no visible focus indicator at all.
+// `htmx:beforeRequest` fires with the triggering element as its
+// target; if that element is a lang-switch form (identified by its
+// own hidden `lang` field, never by a CSS selector built from
+// attacker- or request-influenced text), remember which language was
+// submitted so `afterSettle` below can refocus the equivalent button
+// in the freshly swapped markup -- same visual position, now simply
+// carrying `aria-current="true"` instead of not. Any other boosted
+// or swapped request (a plain button, a review-row form with no
+// `lang` field) resets this to null, so it never fires for them. ----
+let _pendingLangFocusValue = null;
+
+document.body.addEventListener("htmx:beforeRequest", (event) => {
+  const form = event.target instanceof HTMLFormElement ? event.target : null;
+  const langInput = form?.querySelector('input[name="lang"]');
+  _pendingLangFocusValue = langInput ? langInput.value : null;
+});
+
+function restorePendingLangFocus() {
+  if (_pendingLangFocusValue === null) return;
+  const value = _pendingLangFocusValue;
+  _pendingLangFocusValue = null;
+  for (const input of document.querySelectorAll('input[name="lang"]')) {
+    if (input.value === value) {
+      input.closest("form")?.querySelector('button[type="submit"]')?.focus();
+      return;
+    }
+  }
+}
+
 // ---- Gap/legacy review: re-run reveal + ring + chart init on content
 // htmx swaps in (the gap-review list, a confirmed/rejected row) so newly
 // inserted markup animates in the same way the initial page load does. ----
@@ -127,6 +162,7 @@ document.body.addEventListener("htmx:afterSettle", (event) => {
   initReveal(event.target instanceof Element ? event.target : document);
   initRings();
   initCharts();
+  restorePendingLangFocus();
 });
 
 // ---- HTMX failure feedback (UI-15, qa-report-ui-01.md: "a failed HTMX

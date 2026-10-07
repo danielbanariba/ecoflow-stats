@@ -979,6 +979,17 @@ section + section {
    exact `<dt>label</dt><dd>value</dd>` pair, so the visual styling
    below is attached by tag, scoped to `.stat-grid`, rather than by a
    class on the `dt`/`dd` elements themselves. */
+/* A secondary figure under a stat value (e.g. a period's cost), on its
+   own line so a long value never wraps around a dangling separator. */
+.stat-grid dd .stat-card__sub {
+  display: block;
+  margin-top: var(--space-2);
+  font-size: var(--text-caption);
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--text-muted);
+}
+
 .stat-grid dt {
   font-size: var(--text-micro);
   color: var(--text-muted);

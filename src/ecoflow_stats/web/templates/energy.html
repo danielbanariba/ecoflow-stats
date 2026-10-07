@@ -36,7 +36,8 @@
       <dt>{{ t('energy.summary.best_day_label') }}</dt>
       <dd>
         {% if view.best_day is not none %}
-          {{ format_period_label(view.best_day.period, view.granularity, t) }} · {{ t('energy.cost_value').format(amount=("%.2f"|format(view.best_day.cost)), currency=view.currency) }}
+          {{ format_period_label(view.best_day.period, view.granularity, t) }}
+          <span class="stat-card__sub">{{ t('energy.cost_value').format(amount=("%.2f"|format(view.best_day.cost)), currency=view.currency) }}</span>
         {% else %}
           {{ t('common.unavailable') }}
         {% endif %}
@@ -46,7 +47,8 @@
       <dt>{{ t('energy.summary.worst_day_label') }}</dt>
       <dd>
         {% if view.worst_day is not none %}
-          {{ format_period_label(view.worst_day.period, view.granularity, t) }} · {{ t('energy.cost_value').format(amount=("%.2f"|format(view.worst_day.cost)), currency=view.currency) }}
+          {{ format_period_label(view.worst_day.period, view.granularity, t) }}
+          <span class="stat-card__sub">{{ t('energy.cost_value').format(amount=("%.2f"|format(view.worst_day.cost)), currency=view.currency) }}</span>
         {% else %}
           {{ t('common.unavailable') }}
         {% endif %}

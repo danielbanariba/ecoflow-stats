@@ -45,6 +45,11 @@ _NO_OUTAGES_30D = OutagesSummary(
 )
 _RANGE_START = 1_000_000
 _RANGE_END = 1_000_000 + 7 * 24 * 60 * 60
+_ALL_PERIODS_COMPLETE_NOW_TS = int(datetime(2026, 2, 1, tzinfo=UTC).timestamp())
+"""`now_ts` for `build_energy_view_model` tests that are not exercising
+F2's in-progress-period exclusion: well after every `"2026-01-0N"`
+period these tests seed, so every period is complete and `best_day`/
+`worst_day` rank exactly as they did before that filter existed."""
 
 
 def _outage(
@@ -687,6 +692,8 @@ def test_build_energy_view_model_sums_in_and_out_across_every_period() -> None:
         tariff=None,
         currency="",
         series_src="/api/v1/energy/daily?device=1",
+        now_ts=_ALL_PERIODS_COMPLETE_NOW_TS,
+        tz="UTC",
     )
     assert view.total_in_wh == 1_000.0 + 500.0 + 2_000.0 + 100.0
     assert view.total_out_wh == 200.0 + 300.0
@@ -709,6 +716,8 @@ def test_build_energy_view_model_reports_cost_unavailable_without_a_tariff() -> 
         tariff=None,
         currency="",
         series_src="/api/v1/energy/daily?device=1",
+        now_ts=_ALL_PERIODS_COMPLETE_NOW_TS,
+        tz="UTC",
     )
     assert view.total_cost == "unavailable"
     assert view.best_day is None
@@ -735,12 +744,101 @@ def test_build_energy_view_model_ranks_best_and_worst_day_by_cost() -> None:
         tariff=0.20,
         currency="USD",
         series_src="/api/v1/energy/daily?device=1",
+        now_ts=_ALL_PERIODS_COMPLETE_NOW_TS,
+        tz="UTC",
     )
     assert view.total_cost == 1.60
     assert view.best_day is not None
     assert view.best_day.period == "2026-01-06"
     assert view.worst_day is not None
     assert view.worst_day.period == "2026-01-07"
+
+
+def test_build_energy_view_model_excludes_the_in_progress_day_from_best_day() -> None:
+    """F2 (orchestrator QA batch F): a few hours of cheap partial data
+    from today must never win "cheapest period" over a genuinely
+    complete, more expensive day. Pass-1: catches `best_day` ranking
+    over every period including one whose local day has not finished
+    yet. Pass-2: dropping the `complete_rows` filter in
+    `build_energy_view_model` (ranking over all `rows` again) turns
+    this red -- `best_day` would become the $0.001 in-progress day."""
+    periods = [
+        _energy_period_dict("2026-01-06", chg_ac_wh=5_000.0, cost=1.00, currency="USD"),
+        _energy_period_dict("2026-01-07", chg_ac_wh=1_000.0, cost=0.20, currency="USD"),
+        _energy_period_dict("2026-01-08", chg_ac_wh=50.0, cost=0.01, currency="USD"),
+    ]
+    now_ts = int(datetime(2026, 1, 8, 12, 0, tzinfo=UTC).timestamp())  # mid-day on the 8th
+    view = build_energy_view_model(
+        device_records=(_device(1, "SN0001"),),
+        selected_device_id=1,
+        range_start=_RANGE_START,
+        range_end=_RANGE_END,
+        granularity="daily",
+        periods=periods,
+        tariff=0.20,
+        currency="USD",
+        series_src="/api/v1/energy/daily?device=1",
+        now_ts=now_ts,
+        tz="UTC",
+    )
+    assert view.best_day is not None
+    assert view.best_day.period == "2026-01-07"
+
+
+def test_build_energy_view_model_excludes_the_in_progress_day_from_worst_day() -> None:
+    """F2: an expensive-so-far but still-accumulating today must never
+    win "most expensive period" while it is still in progress. Pass-2:
+    same filter reversion as above turns this red -- `worst_day` would
+    become the $5.00 in-progress day."""
+    periods = [
+        _energy_period_dict("2026-01-06", chg_ac_wh=1_000.0, cost=0.20, currency="USD"),
+        _energy_period_dict("2026-01-07", chg_ac_wh=5_000.0, cost=1.00, currency="USD"),
+        _energy_period_dict("2026-01-08", chg_ac_wh=25_000.0, cost=5.00, currency="USD"),
+    ]
+    now_ts = int(datetime(2026, 1, 8, 12, 0, tzinfo=UTC).timestamp())  # mid-day on the 8th
+    view = build_energy_view_model(
+        device_records=(_device(1, "SN0001"),),
+        selected_device_id=1,
+        range_start=_RANGE_START,
+        range_end=_RANGE_END,
+        granularity="daily",
+        periods=periods,
+        tariff=0.20,
+        currency="USD",
+        series_src="/api/v1/energy/daily?device=1",
+        now_ts=now_ts,
+        tz="UTC",
+    )
+    assert view.worst_day is not None
+    assert view.worst_day.period == "2026-01-07"
+
+
+def test_build_energy_view_model_reports_no_best_or_worst_day_when_every_period_is_in_progress() -> (
+    None
+):
+    """F2: a range that only covers today (no complete period yet)
+    must say so honestly -- `best_day`/`worst_day` both `None`, the
+    same "unavailable" the template already renders for no tariff --
+    rather than crowning the one in-progress period. Pass-2: removing
+    the `if complete_rows` guard (falling back to ranking over all
+    rows regardless) turns this red."""
+    periods = [_energy_period_dict("2026-01-08", chg_ac_wh=50.0, cost=0.01, currency="USD")]
+    now_ts = int(datetime(2026, 1, 8, 12, 0, tzinfo=UTC).timestamp())
+    view = build_energy_view_model(
+        device_records=(_device(1, "SN0001"),),
+        selected_device_id=1,
+        range_start=_RANGE_START,
+        range_end=_RANGE_END,
+        granularity="daily",
+        periods=periods,
+        tariff=0.20,
+        currency="USD",
+        series_src="/api/v1/energy/daily?device=1",
+        now_ts=now_ts,
+        tz="UTC",
+    )
+    assert view.best_day is None
+    assert view.worst_day is None
 
 
 def _grid_row(

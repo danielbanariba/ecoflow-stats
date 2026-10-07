@@ -45,6 +45,27 @@ def day_bounds(day: str, tz: str) -> tuple[int, int]:
     return int(start.timestamp()), int(end.timestamp())
 
 
+def period_end_ts(period: str, granularity: str, tz: str) -> int:
+    """The exclusive UTC epoch-second end boundary of a local calendar
+    period -- `"YYYY-MM-DD"` for `granularity="daily"`,
+    `"YYYY-MM"` for `"monthly"` -- under `tz`.
+
+    Lets a caller tell whether a period has fully elapsed yet (energy
+    requirement: a review-batch QA finding, F2 -- a card like
+    "cheapest period" must never crown a period that is still
+    in progress, such as the current local day or month). Delegates
+    the daily case straight to `day_bounds`; the monthly case reuses
+    the same `day_bounds` call on the first day of the *next* month,
+    so a month's own DST transitions (if any of its days have one)
+    are resolved exactly the way `day_bounds` already resolves them,
+    never a fixed-length approximation."""
+    if granularity == "monthly":
+        year, month = (int(part) for part in period.split("-"))
+        next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
+        return day_bounds(f"{next_year:04d}-{next_month:02d}-01", tz)[0]
+    return day_bounds(period, tz)[1]
+
+
 def relative_time_unit(age_s: int) -> tuple[str, int]:
     """Bucket a device sample's age in seconds into the coarsest
     human-friendly unit and count for an "X ago" display (UI-01,
@@ -135,4 +156,11 @@ def split_by_local_days(start_ts: int, end_ts: int, tz: str) -> list[tuple[str, 
     return shares
 
 
-__all__ = ["day_bounds", "duration_parts", "local_day", "relative_time_unit", "split_by_local_days"]
+__all__ = [
+    "day_bounds",
+    "duration_parts",
+    "local_day",
+    "period_end_ts",
+    "relative_time_unit",
+    "split_by_local_days",
+]

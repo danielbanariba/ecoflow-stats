@@ -64,6 +64,7 @@ from ecoflow_stats.web.views import (
     format_duration,
     format_hours_duration,
     format_local_dt,
+    format_period_label,
 )
 
 if TYPE_CHECKING:
@@ -80,6 +81,7 @@ TEMPLATES.env.globals["format_local_dt"] = format_local_dt
 TEMPLATES.env.globals["format_duration"] = format_duration
 TEMPLATES.env.globals["format_hours_duration"] = format_hours_duration
 TEMPLATES.env.globals["format_compact_local_dt"] = format_compact_local_dt
+TEMPLATES.env.globals["format_period_label"] = format_period_label
 TEMPLATES.env.globals["relative_time_unit"] = relative_time_unit
 _CATALOGS = load_catalogs()
 _COOKIE_MAX_AGE_S = 365 * 24 * 60 * 60
@@ -519,6 +521,8 @@ def energy_page(
         tariff=api_ctx.tariff,
         currency=api_ctx.currency,
         series_src=f"/api/v1/energy/daily?device={selected_id}&from={range_start}&to={range_end}",
+        now_ts=int(ctx.now().timestamp()),
+        tz=api_ctx.tz,
     )
     response = TEMPLATES.TemplateResponse(
         request,

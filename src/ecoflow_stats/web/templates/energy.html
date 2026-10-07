@@ -36,7 +36,7 @@
       <dt>{{ t('energy.summary.best_day_label') }}</dt>
       <dd>
         {% if view.best_day is not none %}
-          {{ view.best_day.period }} · {{ t('energy.cost_value').format(amount=("%.2f"|format(view.best_day.cost)), currency=view.currency) }}
+          {{ format_period_label(view.best_day.period, view.granularity, t) }} · {{ t('energy.cost_value').format(amount=("%.2f"|format(view.best_day.cost)), currency=view.currency) }}
         {% else %}
           {{ t('common.unavailable') }}
         {% endif %}
@@ -46,7 +46,7 @@
       <dt>{{ t('energy.summary.worst_day_label') }}</dt>
       <dd>
         {% if view.worst_day is not none %}
-          {{ view.worst_day.period }} · {{ t('energy.cost_value').format(amount=("%.2f"|format(view.worst_day.cost)), currency=view.currency) }}
+          {{ format_period_label(view.worst_day.period, view.granularity, t) }} · {{ t('energy.cost_value').format(amount=("%.2f"|format(view.worst_day.cost)), currency=view.currency) }}
         {% else %}
           {{ t('common.unavailable') }}
         {% endif %}
@@ -71,7 +71,7 @@
         {% if view.total_cost == "unavailable" %}
           {{ t('energy.insight.no_tariff') }}
         {% elif view.best_day is not none %}
-          {{ t('energy.insight.best_day').format(period=view.best_day.period, cost=("%.2f"|format(view.best_day.cost)), currency=view.currency) }}
+          {{ t('energy.insight.best_day').format(period=format_period_label(view.best_day.period, view.granularity, t), cost=("%.2f"|format(view.best_day.cost)), currency=view.currency) }}
         {% else %}
           {{ t('energy.insight.no_data') }}
         {% endif %}

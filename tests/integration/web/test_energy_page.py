@@ -206,6 +206,41 @@ def test_the_energy_table_shows_an_estimate_flag_per_row(
         application.database.close()
 
 
+def test_the_energy_page_never_crowns_the_in_progress_day_as_cheapest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """F2 (orchestrator QA batch F): `_NOW_TS` is exactly midnight UTC
+    on 2026-01-09, so that day's own rollup row (a few seconds of
+    real data at most) is still in progress. Its artificially tiny
+    cost must never win "Cheapest period" over 2026-01-08, the
+    genuinely complete, truly cheapest day. Pass-1: catches the route
+    failing to wire `now`/`tz` through to `build_energy_view_model`,
+    so an in-progress day wins `best_day` again -- the exact
+    "zero production callers" gap class this project already guards
+    against for its pure builders."""
+    application, _device_id, client = _client(
+        monkeypatch,
+        tmp_path,
+        tariff=0.20,
+        currency="USD",
+        rollups=[
+            _energy_row("2026-01-07", chg_ac_wh=5_000.0),  # $1.00, complete
+            _energy_row("2026-01-08", chg_ac_wh=100.0),  # $0.02, complete, true cheapest
+            _energy_row("2026-01-09", chg_ac_wh=5.0),  # $0.001, today, still in progress
+        ],
+    )
+    try:
+        with client:
+            response = client.get("/energy")
+        assert response.status_code == 200
+        html = response.text
+        best_day_card = html[html.index("Cheapest period") : html.index("Most expensive period")]
+        assert "2026-01-09" not in best_day_card
+        assert "Jan 8" in best_day_card
+    finally:
+        application.database.close()
+
+
 def test_unknown_device_on_the_energy_page_returns_a_404_page(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

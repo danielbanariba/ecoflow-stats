@@ -24,7 +24,7 @@ from ecoflow_stats.battery.stats import (
     soc_history,
     summarize_battery_trend,
 )
-from ecoflow_stats.timeutil import duration_parts, local_day
+from ecoflow_stats.timeutil import duration_parts, local_day, period_end_ts
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -418,6 +418,28 @@ def format_compact_local_dt(ts: int, tz: str, show_date: bool) -> str:
     return local.strftime("%m-%d %H:%M") if show_date else local.strftime("%H:%M")
 
 
+_MONTH_ABBR_KEYS = tuple(f"date.month_abbr.{month}" for month in range(1, 13))
+
+
+def format_period_label(period: str, granularity: str, t: Callable[..., str]) -> str:
+    """Render an energy period string -- `"YYYY-MM-DD"` (daily) or
+    `"YYYY-MM"` (monthly) -- as a short, locale-appropriate date (F2,
+    orchestrator QA batch F: the summary cards showed the raw ISO
+    string truncated mid-digit, e.g. `"2026-10-..."`, instead of a
+    real readable date) through the same `t()` translator catalog
+    lookup every other piece of UI copy on this page already goes
+    through, rather than a hardcoded English month name."""
+    if granularity == "monthly":
+        year, month = period.split("-")
+        return t("energy.period.month_year").format(
+            month=t(_MONTH_ABBR_KEYS[int(month) - 1]), year=year
+        )
+    year, month, day = period.split("-")
+    return t("energy.period.day_month_year").format(
+        day=int(day), month=t(_MONTH_ABBR_KEYS[int(month) - 1]), year=year
+    )
+
+
 def build_outages_view_model(
     *,
     device_records: tuple[DeviceRecord, ...],
@@ -740,16 +762,32 @@ def build_energy_view_model(
     tariff: float | None,
     currency: str,
     series_src: str,
+    now_ts: int,
+    tz: str,
 ) -> EnergyViewModel:
     """Build the energy page's view model from
     `web.routes.api.build_energy_periods`'s already-computed period
     dicts -- `tariff` (not an inference from the rows) decides
     `total_cost`/`best_day`/`worst_day`'s availability, since every
     period shares the one app-wide tariff and can never disagree with
-    each other about whether a cost was computed at all."""
+    each other about whether a cost was computed at all.
+
+    `now_ts`/`tz` decide `best_day`/`worst_day`'s eligibility, never
+    `total_in_wh`/`total_out_wh`/`total_cost` (F2, orchestrator QA
+    batch F): the current local day's (or month's) own in-progress
+    period still contributes honestly to the range's totals -- it is
+    only excluded from the "cheapest"/"most expensive" ranking, which
+    a period with just a few hours of data would otherwise win or
+    lose unfairly against a period that ran its full length. A range
+    with no complete period at all reports `None` for both, same as
+    no tariff being configured -- never a ranking over an incomplete
+    field."""
     rows = tuple(build_energy_period_row(period) for period in periods)
     total_in_wh = sum(row.chg_ac_wh + row.chg_dc_wh + row.chg_solar_wh for row in rows)
     total_out_wh = sum(row.dsg_ac_wh + row.dsg_dc_wh for row in rows)
+    complete_rows = tuple(
+        row for row in rows if period_end_ts(row.period, granularity, tz) <= now_ts
+    )
     best_day: EnergyPeriodRow | None = None
     worst_day: EnergyPeriodRow | None = None
     total_cost: float | Literal["unavailable"]
@@ -757,9 +795,9 @@ def build_energy_view_model(
         total_cost = "unavailable"
     else:
         total_cost = sum(row.cost for row in rows)  # type: ignore[misc]
-        if rows:
-            best_day = min(rows, key=lambda row: row.cost)  # type: ignore[arg-type,return-value]
-            worst_day = max(rows, key=lambda row: row.cost)  # type: ignore[arg-type,return-value]
+        if complete_rows:
+            best_day = min(complete_rows, key=lambda row: row.cost)  # type: ignore[arg-type,return-value]
+            worst_day = max(complete_rows, key=lambda row: row.cost)  # type: ignore[arg-type,return-value]
     return EnergyViewModel(
         devices=build_device_options(device_records, selected_device_id=selected_device_id),
         selected_device_id=selected_device_id,
@@ -916,4 +954,5 @@ __all__ = [
     "build_overview_view_model",
     "device_label",
     "format_local_dt",
+    "format_period_label",
 ]

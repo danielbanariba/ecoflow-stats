@@ -616,6 +616,21 @@ def set_preferences(request: Request, lang: str = Form(...)) -> RedirectResponse
     return redirect
 
 
+@router.get("/preferences")
+def preferences_redirect(request: Request) -> RedirectResponse:
+    """UI-09 (qa-report-ui-01.md/-02.md): `/preferences` only ever
+    accepted `POST` -- a `GET` here (e.g. `POST /login` with
+    `next=/preferences`, or a bookmarked/retried link) hit FastAPI's
+    raw, untranslated `405 Method Not Allowed` instead of landing
+    somewhere real. A plain, side-effect-free redirect to the overview
+    is enough: nothing about this route needs to remember where the
+    visitor came from (`safe_next_path`'s own `_NEVER_A_NEXT_TARGET`
+    guard means `next` can no longer point back here anyway), and
+    `AccessControlMiddleware` still applies its own login redirect
+    afterward if the visitor is not authenticated."""
+    return RedirectResponse(url="/", status_code=303)
+
+
 def _render_login(
     request: Request,
     *,

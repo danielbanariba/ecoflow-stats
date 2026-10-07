@@ -8,8 +8,10 @@ Two trust models, selected by whether `ECOFLOW_STATS_PASSWORD` is set:
   `ECOFLOW_STATS_ALLOWED_NETWORKS`; anyone else is told to configure a
   password.
 - **Password configured**: the LAN guard turns off and every route
-  except the health check, the login page, and static assets requires a
-  valid session, issued only by the exact configured password.
+  except the health check, the login page, `/preferences` (UI2-02,
+  qa-report-ui-02.md: the language-switch form must work pre-login
+  too), and static assets requires a valid session, issued only by the
+  exact configured password.
 
 CSRF and security headers (the design's other half of this section,
 Phase 14 PR ii) are implemented below: `require_csrf` is a separate
@@ -52,6 +54,7 @@ CSRF_HEADER = "x-csrf-token"
 CSRF_FORM_FIELD = "csrf_token"
 _HEALTH_CHECK_PATH = "/healthz"
 _LOGIN_PATH = "/login"
+_PREFERENCES_PATH = "/preferences"
 _STATIC_PREFIX = "/static/"
 _API_PREFIX = "/api/"
 _CSP = (
@@ -279,6 +282,19 @@ def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE)
 
 
+_NEVER_A_NEXT_TARGET = (_LOGIN_PATH, _PREFERENCES_PATH)
+"""Paths `safe_next_path` never returns, even when otherwise a valid
+local path (UI2-02/UI-09, qa-report-ui-01.md/-02.md): `/login` lands
+an already-authenticated user back on the login form instead of
+wherever they meant to go -- round 1's own `_referer_next_path`
+fallback could produce exactly this shape when the login page's own
+language-switch form redirected back through `/login` while logged
+out, chaining into a self-referential `next=/login?next=/login%3F...`
+that never resolved. `/preferences` only ever accepts `POST`, so a
+`GET` landing there (e.g. `POST /login` with `next=/preferences`)
+hit a raw `405` before `pages.preferences_redirect` existed."""
+
+
 def safe_next_path(raw: str | None) -> str:
     """Only a same-site, local path (optionally with its own query
     string) is a safe redirect target (design's "local paths only"
@@ -290,14 +306,28 @@ def safe_next_path(raw: str | None) -> str:
     backslash the same way it normalizes a second slash -- an
     attacker-controlled host smuggled past the "//" check alone -- and
     no real route in this app ever legitimately contains a backslash,
-    so treating any as suspicious costs nothing real."""
+    so treating any as suspicious costs nothing real.
+
+    **UI2-02/UI-09 hardening**: a target whose bare path (its own
+    query string stripped before comparing) is exactly `/login` or
+    `/preferences` also collapses to `/` -- see `_NEVER_A_NEXT_TARGET`."""
     if not raw or not raw.startswith("/") or raw.startswith("//") or "\\" in raw:
+        return "/"
+    if raw.split("?", 1)[0] in _NEVER_A_NEXT_TARGET:
         return "/"
     return raw
 
 
 def _is_exempt_from_session(path: str) -> bool:
-    return path == _LOGIN_PATH or path.startswith(_STATIC_PREFIX)
+    """UI2-02 (qa-report-ui-02.md): `/preferences` joins `/login` and
+    static assets here so the language-switch form -- which posts to
+    `/preferences` from any page, including the login page itself --
+    works the same way while logged out as it does while
+    authenticated, instead of being redirected through
+    `AccessControlMiddleware`'s own login-redirect first (the redirect
+    that, before this fix, corrupted `next` into the self-referential
+    chain `_NEVER_A_NEXT_TARGET` now guards against)."""
+    return path in (_LOGIN_PATH, _PREFERENCES_PATH) or path.startswith(_STATIC_PREFIX)
 
 
 def _referer_next_path(request: Request) -> str:

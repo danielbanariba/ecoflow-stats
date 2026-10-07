@@ -83,3 +83,26 @@ def test_a_safe_local_path_keeps_its_own_query_string() -> None:
     assert safe_next_path("/outages?from=2026-01-01&to=2026-01-02") == (
         "/outages?from=2026-01-01&to=2026-01-02"
     )
+
+
+def test_a_target_pointing_back_at_login_collapses_to_root() -> None:
+    """UI2-02 (qa-report-ui-02.md): `_referer_next_path` could produce
+    `next=/login?next=...` when a non-`GET` request (the language-
+    switch form) was submitted from the login page itself while
+    logged out -- accepted unchanged before this fix since it starts
+    with a single `/` and contains no `//`/backslash, it chained into
+    a self-referential redirect a completed login never escaped.
+
+    Pass-2 target: dropping the `_NEVER_A_NEXT_TARGET` check turns
+    this red -- `/login?next=/battery` would pass through unchanged."""
+    assert safe_next_path("/login") == "/"
+    assert safe_next_path("/login?next=/battery") == "/"
+
+
+def test_a_target_pointing_at_preferences_collapses_to_root() -> None:
+    """UI-09 (qa-report-ui-01.md/-02.md): `/preferences` only ever
+    accepts `POST` -- `next=/preferences` survived unchanged before
+    this fix, so completing a login with that `next` landed on a raw
+    `405` instead of a real page."""
+    assert safe_next_path("/preferences") == "/"
+    assert safe_next_path("/preferences?lang=es") == "/"

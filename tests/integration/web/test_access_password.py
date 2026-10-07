@@ -194,21 +194,26 @@ def test_a_wrong_password_redirect_preserves_the_full_next_query_string(
         application.database.close()
 
 
-def test_a_non_get_routes_own_path_never_becomes_the_login_redirect_target(
+def test_the_login_pages_own_language_switch_keeps_the_original_next_intact(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """UI-09 (qa-report-ui-01.md): the language-switch form on every
-    page (including the login page itself) is a `POST /preferences`.
-    An unauthenticated submission used to carry `next=/preferences`
-    straight through -- but `/preferences` has no `GET` route at all,
-    so completing login afterward 405'd instead of landing anywhere
-    useful. The fix falls back to the same-origin `Referer`'s own path
-    and query string, or `/` when there is none.
+    """UI2-02 (qa-report-ui-02.md): round 1's own UI-09 fix made an
+    unauthenticated `POST /preferences` fall back to the referring
+    page's path+query as `next` -- but `/preferences` itself was still
+    *not* exempt from the session check, so that very fallback ran
+    against the login page's own URL (`/login?next=/battery`),
+    producing a self-referential `next=/login?next=/login%3Fnext%3D...`
+    that left a freshly authenticated user stuck looking at the login
+    form. Exempting `/preferences` from the session check (this fix)
+    means the language-switch form is handled directly instead,
+    redirecting back to the exact page the user was already on --
+    `next` is never touched at all, so a login completed afterward
+    lands on the real deep link, not a loop.
 
-    Pass-2 target: reverting `_next_target` to always return
-    `request.url.path` (dropping the `request.method != "GET"` branch
-    into `_referer_next_path`) turns this red -- `next` would become
-    `/preferences` again."""
+    Pass-2 target: reverting `_is_exempt_from_session` to drop
+    `/preferences` turns this red -- `switch_response.headers
+    ["location"]` would become `/login?next=...` (the middleware's own
+    redirect) instead of the original login URL itself."""
     application = _build(monkeypatch, tmp_path)
     try:
         app = create_app(
@@ -219,35 +224,83 @@ def test_a_non_get_routes_own_path_never_becomes_the_login_redirect_target(
         )
 
         with TestClient(app, client=_LOCAL_CLIENT, follow_redirects=False) as client:
-            from_referer = client.post(
+            login_url = "/login?next=/battery"
+            client.get(login_url)
+            csrf_headers = {
+                "x-csrf-token": csrf_token(application.secret, client.cookies[CSRF_COOKIE])
+            }
+
+            switch_response = client.post(
                 "/preferences",
                 data={"lang": "es"},
-                headers={"referer": "http://testserver/outages?from=1767225600"},
+                headers={**csrf_headers, "referer": f"http://testserver{login_url}"},
             )
-            assert from_referer.status_code == 303
-            assert from_referer.headers["location"] == "/login?next=/outages%3Ffrom%3D1767225600"
+            assert switch_response.status_code == 303
+            # Lands back on the *exact* page the user was already on --
+            # never redirected through `/login?next=...` at all, so
+            # `next` was never corrupted in the first place.
+            assert switch_response.headers["location"] == f"http://testserver{login_url}"
+            assert client.cookies.get("lang") == "es"
 
-            no_referer = client.post("/preferences", data={"lang": "es"})
-            assert no_referer.status_code == 303
-            assert no_referer.headers["location"] == "/login?next=/"
+            # The `next` the language-switched login page itself renders
+            # is still the original, correct deep link.
+            relanded = client.get(login_url)
+            assert 'value="/battery"' in relanded.text
 
-            cross_origin_referer = client.post(
-                "/preferences",
-                data={"lang": "es"},
-                headers={"referer": "http://evil.example/outages"},
-            )
-            assert cross_origin_referer.status_code == 303
-            assert cross_origin_referer.headers["location"] == "/login?next=/"
-
-            # Completing login from the referer-derived target lands on a
-            # real page -- never the 405 that replaying `/preferences` as
-            # a `GET` would have produced.
             login_response = client.post(
                 "/login",
-                data={"password": _PASSWORD, "next": "/outages?from=1767225600"},
+                data={"password": _PASSWORD, "next": "/battery"},
                 headers=_csrf_headers(client, application),
             )
             assert login_response.status_code == 303
+            assert login_response.headers["location"] == "/battery"
+            landing = client.get(login_response.headers["location"])
+
+        assert landing.status_code == 200
+    finally:
+        application.database.close()
+
+
+def test_get_preferences_redirects_instead_of_a_raw_405(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UI-09 (qa-report-ui-01.md/-02.md): the round-1 repro --
+    `POST /login` with `next=/preferences` -> `303` -> `GET
+    /preferences` -> raw `405` -- still reproduced verbatim in round 2
+    because `safe_next_path` accepted `/preferences` unchanged.
+    `safe_next_path` now collapses that target to `/` before it is
+    ever used, and `GET /preferences` itself redirects safely instead
+    of 405ing, as defense in depth.
+
+    Pass-2 target: reverting either `safe_next_path`'s
+    `_NEVER_A_NEXT_TARGET` guard or `pages.preferences_redirect`
+    itself turns part of this red -- the login round trip would once
+    again land on a raw `405`."""
+    application = _build(monkeypatch, tmp_path)
+    try:
+        app = create_app(
+            application,
+            start_collector=_never_ticks,
+            start_derive_job=_never_ticks,
+            start_rollups_job=_never_ticks,
+        )
+
+        with TestClient(app, client=_LOCAL_CLIENT, follow_redirects=False) as client:
+            # Defense in depth: a direct `GET /preferences` (e.g. a
+            # stale bookmark) never 405s, authenticated or not.
+            direct_get = client.get("/preferences")
+            assert direct_get.status_code == 303
+            assert direct_get.headers["location"] == "/"
+
+            login_response = client.post(
+                "/login",
+                data={"password": _PASSWORD, "next": "/preferences"},
+                headers=_csrf_headers(client, application),
+            )
+            assert login_response.status_code == 303
+            # `safe_next_path` already collapsed the bad target to `/`
+            # before this redirect was ever built.
+            assert login_response.headers["location"] == "/"
             landing = client.get(login_response.headers["location"])
 
         assert landing.status_code == 200

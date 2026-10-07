@@ -259,6 +259,42 @@ def test_run_import_marks_outages_dirty_from_the_earliest_imported_sample(
         db.close()
 
 
+def test_run_import_marks_rollups_dirty_from_the_earliest_imported_sample(
+    tmp_path: Path,
+) -> None:
+    """A regression that forgot this call would mean a freshly imported
+    history never gets its daily rollups computed either:
+    `rollups.service.derive_rollups` only recomputes a device's
+    `daily_rollups` when its "rollups" derivation is dirty, and an
+    import that marks only "outages" would leave that device's imported
+    history out of `daily_rollups` forever."""
+    db, device_id, import_id = _env(tmp_path)
+    try:
+        samples_db = tmp_path / "snapshot" / "samples.db"
+        samples_db.parent.mkdir(parents=True)
+        _build_snapshot_samples_db(samples_db, [(1_700_000_120, 90), (1_700_000_000, 91)])
+        outage_log = tmp_path / "snapshot" / "outages.log"
+        outage_log.write_text("")
+        derivation_store = DerivationStore(db.writer)
+
+        run_import(
+            snapshot_samples_db=samples_db,
+            snapshot_outage_log=outage_log,
+            device_id=device_id,
+            source_tz="America/Tegucigalpa",
+            import_id=import_id,
+            writer_conn=db.writer,
+            now=_NOW,
+            derivation_store=derivation_store,
+        )
+
+        derivation = derivation_store.get(device_id, "rollups")
+        assert derivation is not None
+        assert derivation.dirty_from_ts == 1_700_000_000  # the earlier of the two rows
+    finally:
+        db.close()
+
+
 def test_run_import_without_a_derivation_store_still_imports(tmp_path: Path) -> None:
     """`derivation_store` is optional precisely so a caller that has not
     wired one up (every pre-existing caller and test) keeps working."""

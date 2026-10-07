@@ -8,9 +8,10 @@ ever reads from the paths it is given, never from the live legacy files.
 Recomputing outages/rollups from the newly-imported data is a later work
 unit (the derive job and `outages.service.derive_outages`, Phase 11): this
 run only stores the raw samples and the legacy outage-log events, and
-marks outages dirty from the earliest imported sample so the next derive
-tick picks the new history up (history-import requirement: "Recomputed
-Events Are Authoritative Where the App's Own Data Overlaps").
+marks outages and rollups dirty from the earliest imported sample so the
+next derive and rollups ticks pick the new history up (history-import
+requirement: "Recomputed Events Are Authoritative Where the App's Own
+Data Overlaps").
 """
 
 from __future__ import annotations
@@ -57,10 +58,10 @@ def run_import(
     `derivation_store` is optional only so every existing caller and test
     that predates `storage.derivations` keeps working unchanged; the real
     CLI path always supplies it now. When given, and at least one sample
-    was actually read, marks the device's `outages` derivation dirty from
-    the earliest imported sample's timestamp -- never from a later one,
-    so a re-run that reads the same or a narrower range never hides an
-    earlier pending mark.
+    was actually read, marks the device's `outages` and `rollups`
+    derivations dirty from the earliest imported sample's timestamp --
+    never from a later one, so a re-run that reads the same or a
+    narrower range never hides an earlier pending mark.
     """
     legacy_store = LegacyStore(writer_conn)
     sample_store = SampleStore(writer_conn)
@@ -123,6 +124,7 @@ def run_import(
 
     if derivation_store is not None and timestamps:
         derivation_store.mark_dirty(device_id, "outages", min(timestamps))
+        derivation_store.mark_dirty(device_id, "rollups", min(timestamps))
 
     return ImportReport(
         samples_read=len(valid_rows) + invalid,

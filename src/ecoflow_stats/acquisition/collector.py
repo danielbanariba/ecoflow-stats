@@ -85,10 +85,10 @@ async def collect_one(
     test that predates this wiring keeps working unchanged; the real
     collector path (``run_forever``, via ``bootstrap.build``) always
     supplies it now. When given, and a sample was actually stored, marks
-    the device's ``outages`` derivation dirty from this tick's timestamp
-    -- the same trigger `history_import.service.run_import` already uses
-    for its own path (design-data section 4.3: "collector tick
-    (dirty_from = sample ts)").
+    the device's ``outages`` and ``rollups`` derivations dirty from this
+    tick's timestamp -- the same trigger `history_import.service.
+    run_import` already uses for its own path (design-data section 4.3:
+    "collector tick (dirty_from = sample ts)").
 
     ``live_state``/``notification_service`` are optional for the same
     backward-compatibility reason; the real path supplies both only when
@@ -137,6 +137,7 @@ async def collect_one(
         return False
     if derivation_store is not None:
         derivation_store.mark_dirty(device.device_id, "outages", ts)
+        derivation_store.mark_dirty(device.device_id, "rollups", ts)
     if live_state is not None:
         transitions = live_state.feed(ts, normalized.reading, config=detector_config)
         if notification_service is not None:

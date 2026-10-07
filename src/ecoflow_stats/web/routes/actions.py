@@ -36,6 +36,7 @@ from ecoflow_stats.outages.service import record_decision, undo_decision
 from ecoflow_stats.storage.legacy import LegacyStore
 from ecoflow_stats.web.deps import LANG_COOKIE, negotiate_request_lang
 from ecoflow_stats.web.i18n import load_catalogs, translator
+from ecoflow_stats.web.routes.ranges import resolve_range, validate_timestamp_bound
 from ecoflow_stats.web.security import (
     SecurityContext,
     csrf_cookie_value,
@@ -186,13 +187,24 @@ def gap_review_list(
     not anywhere else)."""
     ctx: ApiContext = request.app.state.api
     device_id = _resolve_device_id(ctx.device_records, device)
-    range_end = end if end is not None else int(ctx.now().timestamp())
-    range_start = start if start is not None else range_end - _DEFAULT_RANGE_S
+    t = _translator_for(request)
+    try:
+        range_start, range_end = resolve_range(
+            now_ts=int(ctx.now().timestamp()),
+            start=start,
+            end=end,
+            default_range_s=_DEFAULT_RANGE_S,
+        )
+    except ValueError:
+        # API2-01 (qa-report-data-02.md): an out-of-range or inverted
+        # `from`/`to` is invalid client input, not a crash -- answered
+        # with a plain 400 fragment, the same idiom this route already
+        # uses for "no gaps in range" below.
+        return HTMLResponse(f"<p>{t('error.400.message')}</p>", status_code=400)
     gaps = ctx.outage_store.gaps(device_id, range_start, range_end)
     decisions = ctx.decision_store.active(device_id) if ctx.decision_store is not None else []
     pending = unresolved_gaps(gaps, decisions, range_end)
     decided = decided_gaps(gaps, decisions, range_end)
-    t = _translator_for(request)
     cookie_value, token, is_new = _csrf_context(request)
     if not pending and not decided:
         response = HTMLResponse(f"<p>{t('outages.gap_review.empty')}</p>")
@@ -237,13 +249,22 @@ def legacy_review_list(
     rule."""
     ctx: ApiContext = request.app.state.api
     device_id = _resolve_device_id(ctx.device_records, device)
-    range_end = end if end is not None else int(ctx.now().timestamp())
-    range_start = start if start is not None else range_end - _DEFAULT_RANGE_S
+    t = _translator_for(request)
+    try:
+        range_start, range_end = resolve_range(
+            now_ts=int(ctx.now().timestamp()),
+            start=start,
+            end=end,
+            default_range_s=_DEFAULT_RANGE_S,
+        )
+    except ValueError:
+        # API2-01 (qa-report-data-02.md): see `gap_review_list`'s own
+        # identical guard above.
+        return HTMLResponse(f"<p>{t('error.400.message')}</p>", status_code=400)
     legacy = _legacy_store(request).between(device_id, range_start, range_end)
     decisions = ctx.decision_store.active(device_id) if ctx.decision_store is not None else []
     pending = unresolved_legacy(legacy, decisions)
     decided = decided_legacy(legacy, decisions)
-    t = _translator_for(request)
     cookie_value, token, is_new = _csrf_context(request)
     if not pending and not decided:
         response = HTMLResponse(f"<p>{t('outages.legacy_review.empty')}</p>")
@@ -284,6 +305,13 @@ def decide_gap(
     `ValueError` is only translated to an HTTP 400, never re-validated)."""
     ctx: ApiContext = request.app.state.api
     _require_device(ctx.device_records, device)
+    try:
+        validate_timestamp_bound("gap_start", gap_start)
+    except ValueError as exc:
+        # API2-01 (qa-report-data-02.md): a huge `gap_start` reached
+        # `OutageStore.gaps`'s raw SQLite bind via `_find_gap` before
+        # this check, raising an unhandled `OverflowError` -> `500`.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if ctx.decision_store is None:
         raise HTTPException(status_code=503, detail="decisions are not available")
     gap = _find_gap(ctx, device, gap_start)
@@ -333,6 +361,13 @@ def decide_legacy(
     reasoning)."""
     ctx: ApiContext = request.app.state.api
     _require_device(ctx.device_records, device)
+    try:
+        validate_timestamp_bound("start", start)
+    except ValueError as exc:
+        # API2-01 (qa-report-data-02.md): a huge `start` reached
+        # `LegacyStore.get`'s raw SQLite bind before this check,
+        # raising an unhandled `OverflowError` -> `500`.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if ctx.decision_store is None:
         raise HTTPException(status_code=503, detail="decisions are not available")
     entry = _legacy_store(request).get(device, start)
@@ -382,6 +417,16 @@ def undo(
     does not exist."""
     ctx: ApiContext = request.app.state.api
     _require_device(ctx.device_records, device)
+    try:
+        validate_timestamp_bound("decision_id", decision_id)
+        validate_timestamp_bound("start", start)
+    except ValueError as exc:
+        # API2-01 (qa-report-data-02.md): a huge `decision_id` reached
+        # `DecisionStore.undo`'s raw SQLite bind directly, and a huge
+        # `start` reaches `_find_gap`/`LegacyStore.get` below the same
+        # unchecked way `decide_gap`/`decide_legacy` did -- both raised
+        # an unhandled `OverflowError` -> `500` before this check.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if ctx.decision_store is None:
         raise HTTPException(status_code=503, detail="decisions are not available")
     undo_decision(decision_id, decision_store=ctx.decision_store)

@@ -37,6 +37,8 @@ from ecoflow_stats.web.routes.api import (
     build_energy_periods,
     select_bucket,
 )
+from ecoflow_stats.web.routes.errors import render_error_page
+from ecoflow_stats.web.routes.ranges import resolve_range
 from ecoflow_stats.web.security import (
     SecurityContext,
     clear_session_cookie,
@@ -279,8 +281,20 @@ def outages_page(
     selected_id = _resolve_device(request, ctx, device)
     csrf_cookie, csrf_cookie_is_new = csrf_cookie_value(request)
 
-    range_end = end if end is not None else int(ctx.now().timestamp())
-    range_start = start if start is not None else range_end - _OUTAGES_DEFAULT_RANGE_S
+    try:
+        range_start, range_end = resolve_range(
+            now_ts=int(ctx.now().timestamp()),
+            start=start,
+            end=end,
+            default_range_s=_OUTAGES_DEFAULT_RANGE_S,
+        )
+    except ValueError:
+        # API2-01 (qa-report-data-02.md): an out-of-range or inverted
+        # `from`/`to` is invalid client input, not a server crash --
+        # same bound check the JSON API's own `_resolve_range` already
+        # applies, answered here with the themed error page instead of
+        # a JSON body.
+        return render_error_page(request, 400)
 
     events = ctx.outage_store.events(selected_id, range_start, range_end)
     gaps = ctx.outage_store.gaps(selected_id, range_start, range_end)
@@ -376,8 +390,17 @@ def battery_page(
     selected_id = _resolve_device(request, ctx, device)
     csrf_cookie, csrf_cookie_is_new = csrf_cookie_value(request)
 
-    range_end = end if end is not None else int(ctx.now().timestamp())
-    range_start = start if start is not None else range_end - _BATTERY_DEFAULT_RANGE_S
+    try:
+        range_start, range_end = resolve_range(
+            now_ts=int(ctx.now().timestamp()),
+            start=start,
+            end=end,
+            default_range_s=_BATTERY_DEFAULT_RANGE_S,
+        )
+    except ValueError:
+        # API2-01 (qa-report-data-02.md): see `outages_page`'s own
+        # identical guard above.
+        return render_error_page(request, 400)
 
     samples = [
         (row.ts, row.reading)
@@ -458,8 +481,17 @@ def energy_page(
     selected_id = _resolve_device(request, ctx, device)
     csrf_cookie, csrf_cookie_is_new = csrf_cookie_value(request)
 
-    range_end = end if end is not None else int(ctx.now().timestamp())
-    range_start = start if start is not None else range_end - _ENERGY_DEFAULT_RANGE_S
+    try:
+        range_start, range_end = resolve_range(
+            now_ts=int(ctx.now().timestamp()),
+            start=start,
+            end=end,
+            default_range_s=_ENERGY_DEFAULT_RANGE_S,
+        )
+    except ValueError:
+        # API2-01 (qa-report-data-02.md): see `outages_page`'s own
+        # identical guard above.
+        return render_error_page(request, 400)
 
     granularity = select_bucket(range_start, range_end, ENERGY_GRANULARITY_TIERS)
     rows = _rollup_store(request).energy_between(
@@ -525,8 +557,17 @@ def grid_page(
     selected_id = _resolve_device(request, ctx, device)
     csrf_cookie, csrf_cookie_is_new = csrf_cookie_value(request)
 
-    range_end = end if end is not None else int(ctx.now().timestamp())
-    range_start = start if start is not None else range_end - _GRID_DEFAULT_RANGE_S
+    try:
+        range_start, range_end = resolve_range(
+            now_ts=int(ctx.now().timestamp()),
+            start=start,
+            end=end,
+            default_range_s=_GRID_DEFAULT_RANGE_S,
+        )
+    except ValueError:
+        # API2-01 (qa-report-data-02.md): see `outages_page`'s own
+        # identical guard above.
+        return render_error_page(request, 400)
 
     rows = _rollup_store(request).grid_between(
         selected_id, local_day(range_start, api_ctx.tz), local_day(range_end, api_ctx.tz)

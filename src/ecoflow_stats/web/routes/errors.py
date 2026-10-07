@@ -42,8 +42,8 @@ _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 TEMPLATES = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 _CATALOGS = load_catalogs()
 
-_TITLE_KEYS = {404: "error.404.title", 500: "error.500.title"}
-_MESSAGE_KEYS = {404: "error.404.message", 500: "error.500.message"}
+_TITLE_KEYS = {400: "error.400.title", 404: "error.404.title", 500: "error.500.title"}
+_MESSAGE_KEYS = {400: "error.400.message", 404: "error.404.message", 500: "error.500.message"}
 
 
 def _show_logout(request: Request, security: SecurityContext) -> bool:

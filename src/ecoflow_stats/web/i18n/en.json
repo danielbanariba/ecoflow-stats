@@ -209,6 +209,8 @@
   "grid.table.empty": "No grid data recorded in this range.",
   "grid.insight.stable": "Voltage ranged from {low} V to {high} V over this range.",
   "grid.insight.no_data": "No grid-present readings in this range to describe typical voltage.",
+  "error.400.title": "Invalid request",
+  "error.400.message": "That link's date range isn't valid. Check the from/to values and try again.",
   "error.404.title": "Page not found",
   "error.404.message": "There's nothing at this address. It may have been moved, or the link may be out of date.",
   "error.500.title": "Something went wrong",

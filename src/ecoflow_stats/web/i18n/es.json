@@ -209,6 +209,8 @@
   "grid.table.empty": "No se registraron datos de red en este rango.",
   "grid.insight.stable": "El voltaje varió entre {low} V y {high} V en este rango.",
   "grid.insight.no_data": "No hay suficientes lecturas con energía de red presente en este rango para describir el voltaje típico.",
+  "error.400.title": "Solicitud no válida",
+  "error.400.message": "El rango de fechas de ese enlace no es válido. Verifique los valores from/to e intente de nuevo.",
   "error.404.title": "Página no encontrada",
   "error.404.message": "No hay nada en esta dirección. Puede que se haya movido, o que el enlace esté desactualizado.",
   "error.500.title": "Ocurrió un error",

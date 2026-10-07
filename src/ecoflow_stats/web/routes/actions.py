@@ -103,10 +103,19 @@ def _render_gap_row(
     t: Callable[[str], str],
     decision: dict[str, object] | None,
     csrf_token: str,
+    range_start: int,
+    range_end: int,
 ) -> str:
     template = TEMPLATES.get_template("partials/gap_row.html")
     return template.render(
-        gap=gap, device_id=device_id, tz=tz, t=t, decision=decision, csrf_token=csrf_token
+        gap=gap,
+        device_id=device_id,
+        tz=tz,
+        t=t,
+        decision=decision,
+        csrf_token=csrf_token,
+        range_start=range_start,
+        range_end=range_end,
     )
 
 
@@ -118,11 +127,57 @@ def _render_legacy_row(
     t: Callable[[str], str],
     decision: dict[str, object] | None,
     csrf_token: str,
+    range_start: int,
+    range_end: int,
 ) -> str:
     template = TEMPLATES.get_template("partials/legacy_row.html")
     return template.render(
-        entry=entry, device_id=device_id, tz=tz, t=t, decision=decision, csrf_token=csrf_token
+        entry=entry,
+        device_id=device_id,
+        tz=tz,
+        t=t,
+        decision=decision,
+        csrf_token=csrf_token,
+        range_start=range_start,
+        range_end=range_end,
     )
+
+
+def _review_count_oob_fragment(
+    *, element_id: str, key: str, count: int, t: Callable[..., str]
+) -> str:
+    """UI2-06 (qa-report-ui-02.md): the exact same `<p id=... class=
+    "reveal text-muted">` markup `outages.html` itself renders for
+    `view.gap_review_count`/`view.legacy_review_count`, carrying
+    `hx-swap-oob="true"` so htmx swaps it into the already-visible
+    page by `element_id` alone, independent of wherever `hx-target`
+    points the rest of the response -- the single mechanism that lets
+    `decide_gap`/`decide_legacy`/`undo` update this count in the same
+    response as the row itself, with no separate request and no
+    reload. Reuses the page's own i18n key/pluralization rule
+    (`t(key, count=...).format(count=...)`), so the two never drift
+    out of sync."""
+    text = t(key, count=count).format(count=count)
+    return f'<p id="{element_id}" hx-swap-oob="true" class="reveal text-muted">{text}</p>'
+
+
+def _resolve_review_range(
+    ctx: ApiContext, range_from: int | None, range_to: int | None
+) -> tuple[int, int]:
+    """Resolve a decide/undo POST's own optional `range_from`/
+    `range_to` hidden fields (UI2-06) with the exact same default-
+    range rule `gap_review_list`/`legacy_review_list` already apply --
+    so a row rendered before this fix (missing those fields) still
+    recomputes a sensible count instead of erroring, and a row
+    rendered after it recomputes the count for the range the page
+    actually has open."""
+    range_start, range_end = resolve_range(
+        now_ts=int(ctx.now().timestamp()),
+        start=range_from,
+        end=range_to,
+        default_range_s=_DEFAULT_RANGE_S,
+    )
+    return range_start, range_end
 
 
 def _find_gap(ctx: ApiContext, device_id: int, gap_start: int) -> Gap | None:
@@ -211,7 +266,14 @@ def gap_review_list(
     else:
         pending_rows = (
             _render_gap_row(
-                gap=gap, device_id=device_id, tz=ctx.tz, t=t, decision=None, csrf_token=token
+                gap=gap,
+                device_id=device_id,
+                tz=ctx.tz,
+                t=t,
+                decision=None,
+                csrf_token=token,
+                range_start=range_start,
+                range_end=range_end,
             )
             for gap in pending
         )
@@ -223,6 +285,8 @@ def gap_review_list(
                 t=t,
                 decision={"id": decision.id, "verdict": decision.verdict},
                 csrf_token=token,
+                range_start=range_start,
+                range_end=range_end,
             )
             for gap, decision in decided
         )
@@ -271,7 +335,14 @@ def legacy_review_list(
     else:
         pending_rows = (
             _render_legacy_row(
-                entry=entry, device_id=device_id, tz=ctx.tz, t=t, decision=None, csrf_token=token
+                entry=entry,
+                device_id=device_id,
+                tz=ctx.tz,
+                t=t,
+                decision=None,
+                csrf_token=token,
+                range_start=range_start,
+                range_end=range_end,
             )
             for entry in pending
         )
@@ -283,6 +354,8 @@ def legacy_review_list(
                 t=t,
                 decision={"id": decision.id, "verdict": decision.verdict},
                 csrf_token=token,
+                range_start=range_start,
+                range_end=range_end,
             )
             for entry, decision in decided
         )
@@ -297,16 +370,27 @@ def decide_gap(
     gap_start: int,
     device: int = Form(...),
     verdict: str = Form(...),
+    range_from: int | None = Form(None),
+    range_to: int | None = Form(None),
 ) -> HTMLResponse:
     """Scenario "A gap can be reviewed and resolved": confirm (`verdict
     ="outage"`) or reject (`verdict="no_outage"`) one gap, delegating
     entirely to `outages.service.record_decision` (task 16.3 REFACTOR:
     no decision logic duplicated here -- an invalid verdict's
-    `ValueError` is only translated to an HTTP 400, never re-validated)."""
+    `ValueError` is only translated to an HTTP 400, never re-validated).
+
+    UI2-06 (qa-report-ui-02.md): the gap-review pending count used to
+    stay stale until the next reload -- this route only ever
+    re-rendered the one decided row, never the count text sitting
+    above the list. `range_from`/`range_to` (the row's own hidden
+    fields, carrying the review list's currently selected range) let
+    this recompute that count and append it to the response as an
+    `hx-swap-oob` fragment, alongside the row itself."""
     ctx: ApiContext = request.app.state.api
     _require_device(ctx.device_records, device)
     try:
         validate_timestamp_bound("gap_start", gap_start)
+        range_start, range_end = _resolve_review_range(ctx, range_from, range_to)
     except ValueError as exc:
         # API2-01 (qa-report-data-02.md): a huge `gap_start` reached
         # `OutageStore.gaps`'s raw SQLite bind via `_find_gap` before
@@ -339,6 +423,17 @@ def decide_gap(
         t=t,
         decision={"id": decision_id, "verdict": verdict},
         csrf_token=token,
+        range_start=range_start,
+        range_end=range_end,
+    )
+    gaps = ctx.outage_store.gaps(device, range_start, range_end)
+    decisions = ctx.decision_store.active(device)
+    pending_count = len(unresolved_gaps(gaps, decisions, range_end))
+    html += _review_count_oob_fragment(
+        element_id="gap-review-count",
+        key="outages.gap_review.count",
+        count=pending_count,
+        t=t,
     )
     response = HTMLResponse(html, headers={"HX-Trigger": "outages-changed"})
     _set_csrf_cookie_if_new(request, response, cookie_value, is_new)
@@ -351,6 +446,8 @@ def decide_legacy(
     start: int,
     device: int = Form(...),
     verdict: str = Form(...),
+    range_from: int | None = Form(None),
+    range_to: int | None = Form(None),
 ) -> HTMLResponse:
     """Scenario "A suspected phantom can be un-flagged": the single-row
     action flow the spec requires. `storage.legacy.LegacyStore` has no
@@ -358,11 +455,15 @@ def decide_legacy(
     route only ever needs the exact `get(device_id, start_ts)` lookup it
     already has -- there is deliberately no "browse every phantom" list
     here (see Known gaps in this batch's apply-progress for the full
-    reasoning)."""
+    reasoning).
+
+    UI2-06 (qa-report-ui-02.md): see `decide_gap`'s identical
+    `range_from`/`range_to` -> OOB pending-count fragment note above."""
     ctx: ApiContext = request.app.state.api
     _require_device(ctx.device_records, device)
     try:
         validate_timestamp_bound("start", start)
+        range_start, range_end = _resolve_review_range(ctx, range_from, range_to)
     except ValueError as exc:
         # API2-01 (qa-report-data-02.md): a huge `start` reached
         # `LegacyStore.get`'s raw SQLite bind before this check,
@@ -395,6 +496,17 @@ def decide_legacy(
         t=t,
         decision={"id": decision_id, "verdict": verdict},
         csrf_token=token,
+        range_start=range_start,
+        range_end=range_end,
+    )
+    legacy = _legacy_store(request).between(device, range_start, range_end)
+    decisions = ctx.decision_store.active(device)
+    pending_count = len(unresolved_legacy(legacy, decisions))
+    html += _review_count_oob_fragment(
+        element_id="legacy-review-count",
+        key="outages.legacy_review.count",
+        count=pending_count,
+        t=t,
     )
     response = HTMLResponse(html, headers={"HX-Trigger": "outages-changed"})
     _set_csrf_cookie_if_new(request, response, cookie_value, is_new)
@@ -408,18 +520,26 @@ def undo(
     device: int = Form(...),
     target: str = Form(...),
     start: int = Form(...),
+    range_from: int | None = Form(None),
+    range_to: int | None = Form(None),
 ) -> HTMLResponse:
     """`POST /decisions/{id}/undo`: reverts to the prior (unresolved)
     state, delegating to `outages.service.undo_decision`. `device`,
     `target`, and `start` ride along as hidden fields on the row that
     rendered the undo button -- the row already knows exactly what it is
     undoing, so this never needs a `DecisionStore.get(id)` lookup that
-    does not exist."""
+    does not exist.
+
+    UI2-06 (qa-report-ui-02.md): see `decide_gap`'s identical
+    `range_from`/`range_to` -> OOB pending-count fragment note above
+    -- an undo makes a gap/legacy entry pending again, so the count
+    it put back into needs the same live update a decide does."""
     ctx: ApiContext = request.app.state.api
     _require_device(ctx.device_records, device)
     try:
         validate_timestamp_bound("decision_id", decision_id)
         validate_timestamp_bound("start", start)
+        range_start, range_end = _resolve_review_range(ctx, range_from, range_to)
     except ValueError as exc:
         # API2-01 (qa-report-data-02.md): a huge `decision_id` reached
         # `DecisionStore.undo`'s raw SQLite bind directly, and a huge
@@ -437,14 +557,46 @@ def undo(
         if gap is None:
             raise HTTPException(status_code=404, detail="unknown gap")
         html = _render_gap_row(
-            gap=gap, device_id=device, tz=ctx.tz, t=t, decision=None, csrf_token=token
+            gap=gap,
+            device_id=device,
+            tz=ctx.tz,
+            t=t,
+            decision=None,
+            csrf_token=token,
+            range_start=range_start,
+            range_end=range_end,
+        )
+        gaps = ctx.outage_store.gaps(device, range_start, range_end)
+        decisions = ctx.decision_store.active(device)
+        pending_count = len(unresolved_gaps(gaps, decisions, range_end))
+        html += _review_count_oob_fragment(
+            element_id="gap-review-count",
+            key="outages.gap_review.count",
+            count=pending_count,
+            t=t,
         )
     elif target == "legacy":
         entry = _legacy_store(request).get(device, start)
         if entry is None:
             raise HTTPException(status_code=404, detail="unknown legacy outage")
         html = _render_legacy_row(
-            entry=entry, device_id=device, tz=ctx.tz, t=t, decision=None, csrf_token=token
+            entry=entry,
+            device_id=device,
+            tz=ctx.tz,
+            t=t,
+            decision=None,
+            csrf_token=token,
+            range_start=range_start,
+            range_end=range_end,
+        )
+        legacy = _legacy_store(request).between(device, range_start, range_end)
+        decisions = ctx.decision_store.active(device)
+        pending_count = len(unresolved_legacy(legacy, decisions))
+        html += _review_count_oob_fragment(
+            element_id="legacy-review-count",
+            key="outages.legacy_review.count",
+            count=pending_count,
+            t=t,
         )
     else:
         raise HTTPException(status_code=400, detail=f"unknown undo target {target!r}")

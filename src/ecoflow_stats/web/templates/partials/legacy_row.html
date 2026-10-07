@@ -6,7 +6,9 @@
   form (when it is not).
 
   Context: `entry` (a `storage.legacy.LegacyOutage`), `device_id`,
-  `tz`, `t`, and `decision` (`None`, or `{"id": int, "verdict": str}`).
+  `tz`, `t`, `decision` (`None`, or `{"id": int, "verdict": str}`),
+  and `range_start`/`range_end` (UI2-06, qa-report-ui-02.md -- see
+  `gap_row.html`'s identical context note for the full reasoning).
 #}
 <article class="review-row reveal is-visible" data-legacy-start="{{ entry.start_ts }}">
   <h3>
@@ -33,6 +35,8 @@
   >
     <input type="hidden" name="device" value="{{ device_id }}">
     <input type="hidden" name="verdict" value="real">
+    <input type="hidden" name="range_from" value="{{ range_start }}">
+    <input type="hidden" name="range_to" value="{{ range_end }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit" class="btn btn--ghost">{{ t('outages.legacy_review.mark_real_button') }}</button>
   </form>
@@ -48,6 +52,8 @@
     <input type="hidden" name="device" value="{{ device_id }}">
     <input type="hidden" name="target" value="legacy">
     <input type="hidden" name="start" value="{{ entry.start_ts }}">
+    <input type="hidden" name="range_from" value="{{ range_start }}">
+    <input type="hidden" name="range_to" value="{{ range_end }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit" class="btn btn--ghost">{{ t('outages.legacy_review.undo_button') }}</button>
   </form>

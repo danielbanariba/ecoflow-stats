@@ -125,7 +125,15 @@
 <section class="outages-gap-review-section" aria-label="{{ t('outages.gap_review.heading') }}">
   <h2 class="reveal">{{ t('outages.gap_review.heading') }}</h2>
   <p class="reveal mt-6 text-muted">{{ t('outages.gap_review.intro') }}</p>
-  <p class="reveal text-muted">{{ t('outages.gap_review.count', count=view.gap_review_count).format(count=view.gap_review_count) }}</p>
+  {#
+    UI2-06 (qa-report-ui-02.md): `id` is this element's own OOB-swap
+    target -- `actions.decide_gap`/`decide_legacy`/`undo` append a
+    matching `hx-swap-oob="true"` fragment carrying the freshly
+    recomputed count to their normal row response, so deciding or
+    undoing a gap updates this text in the same response, with no
+    separate request and no page reload.
+  #}
+  <p id="gap-review-count" class="reveal text-muted">{{ t('outages.gap_review.count', count=view.gap_review_count).format(count=view.gap_review_count) }}</p>
   <button
     type="button"
     class="btn btn--ghost gap-review-expand reveal"
@@ -139,7 +147,7 @@
 <section class="outages-legacy-review-section reveal" aria-label="{{ t('outages.legacy_review.heading') }}">
   <h2 class="reveal">{{ t('outages.legacy_review.heading') }}</h2>
   <p class="reveal mt-6 text-muted">{{ t('outages.legacy_review.intro') }}</p>
-  <p class="reveal text-muted">{{ t('outages.legacy_review.count', count=view.legacy_review_count).format(count=view.legacy_review_count) }}</p>
+  <p id="legacy-review-count" class="reveal text-muted">{{ t('outages.legacy_review.count', count=view.legacy_review_count).format(count=view.legacy_review_count) }}</p>
   <button
     type="button"
     class="btn btn--ghost legacy-review-expand reveal"

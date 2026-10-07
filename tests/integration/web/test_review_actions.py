@@ -342,6 +342,106 @@ def test_undo_reverts_a_gap_decision_to_its_prior_unresolved_state(
         application.database.close()
 
 
+def test_deciding_a_gap_oob_swaps_the_pending_count_in_the_same_response(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UI2-06 (qa-report-ui-02.md): the gap-review pending count used
+    to stay stale until the next reload -- deciding a gap only ever
+    re-rendered that one row, never the count text above the list.
+    Pass-1: a route that recomputed the count but forgot to emit it
+    as an `hx-swap-oob` fragment (or emitted it under the wrong `id`)
+    would leave htmx with nothing to swap, silently reproducing the
+    exact staleness this finding reports -- this test starts with two
+    pending gaps, decides one, and asserts the *same* response already
+    carries the updated "1 gap awaiting review" text against the
+    `gap-review-count` id, with no second request."""
+    first_start = _RANGE_START + 2_000
+    second_start = _RANGE_START + 5_000
+    application, device_id, client = _client(
+        monkeypatch,
+        tmp_path,
+        gaps=[
+            _gap(first_start, first_start + 90),
+            _gap(second_start, second_start + 90),
+        ],
+    )
+    try:
+        with client:
+            headers = _csrf_headers(client, application)
+            list_response = client.get(
+                "/outages/gaps",
+                params={"device": device_id, "from": _RANGE_START, "to": _NOW_TS},
+            )
+            assert "2 gaps awaiting review" not in list_response.text  # the list has no count text
+
+            response = client.post(
+                f"/outages/gaps/{first_start}/decision",
+                data={
+                    "device": device_id,
+                    "verdict": "outage",
+                    "range_from": _RANGE_START,
+                    "range_to": _NOW_TS,
+                },
+                headers=headers,
+            )
+
+        assert response.status_code == 200
+        assert 'id="gap-review-count"' in response.text
+        assert 'hx-swap-oob="true"' in response.text
+        assert "1 gap awaiting review" in response.text
+        assert "2 gaps awaiting review" not in response.text
+    finally:
+        application.database.close()
+
+
+def test_undoing_a_gap_decision_oob_swaps_the_pending_count_back_up(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UI2-06: the inverse of the test above -- undoing a decision
+    makes a gap pending again, so the count it was removed from must
+    go back up in the undo's own response too, not just the decide
+    response. Pass-2 target: an `undo` that re-rendered the row but
+    never recomputed/emitted the OOB count fragment (the state before
+    this fix) turns this red -- no `gap-review-count` text appears in
+    `undo_response.text` at all."""
+    gap_start = _RANGE_START + 2_000
+    application, device_id, client = _client(
+        monkeypatch, tmp_path, gaps=[_gap(gap_start, gap_start + 90)]
+    )
+    try:
+        with client:
+            headers = _csrf_headers(client, application)
+            client.post(
+                f"/outages/gaps/{gap_start}/decision",
+                data={
+                    "device": device_id,
+                    "verdict": "outage",
+                    "range_from": _RANGE_START,
+                    "range_to": _NOW_TS,
+                },
+                headers=headers,
+            )
+            decision_id = DecisionStore(application.database.writer).active(device_id)[0].id
+
+            undo_response = client.post(
+                f"/decisions/{decision_id}/undo",
+                data={
+                    "device": device_id,
+                    "target": "gap",
+                    "start": gap_start,
+                    "range_from": _RANGE_START,
+                    "range_to": _NOW_TS,
+                },
+                headers=headers,
+            )
+
+        assert undo_response.status_code == 200
+        assert 'id="gap-review-count"' in undo_response.text
+        assert "1 gap awaiting review" in undo_response.text
+    finally:
+        application.database.close()
+
+
 def test_unflagging_a_suspected_phantom_shows_it_as_confirmed_real(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -370,6 +470,43 @@ def test_unflagging_a_suspected_phantom_shows_it_as_confirmed_real(
         assert decisions[0].target == "legacy"
         assert decisions[0].start_ts == legacy_start
         assert decisions[0].verdict == "real"
+    finally:
+        application.database.close()
+
+
+def test_deciding_a_legacy_entry_oob_swaps_the_pending_count_in_the_same_response(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UI2-06 (qa-report-ui-02.md): `decide_legacy`'s own OOB pending-
+    count update, mirroring the gap test above -- a different code
+    path (`LegacyStore.between` + `unresolved_legacy`, not
+    `OutageStore.gaps` + `unresolved_gaps`), so it is not proven by
+    that test alone. Starts with two suspected phantoms, un-flags one,
+    and asserts the same response already shows "1 legacy outage
+    awaiting review" against the `legacy-review-count` id."""
+    first_start = _RANGE_START + 6_000
+    second_start = _RANGE_START + 9_000
+    application, device_id, client = _client(monkeypatch, tmp_path)
+    _seed_legacy_phantom(application, device_id, first_start)
+    _seed_legacy_phantom(application, device_id, second_start)
+    try:
+        with client:
+            response = client.post(
+                f"/outages/legacy/{first_start}/decision",
+                data={
+                    "device": device_id,
+                    "verdict": "real",
+                    "range_from": _RANGE_START,
+                    "range_to": _NOW_TS,
+                },
+                headers=_csrf_headers(client, application),
+            )
+
+        assert response.status_code == 200
+        assert 'id="legacy-review-count"' in response.text
+        assert 'hx-swap-oob="true"' in response.text
+        assert "1 legacy outage awaiting review" in response.text
+        assert "2 legacy outages awaiting review" not in response.text
     finally:
         application.database.close()
 

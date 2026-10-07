@@ -3,7 +3,23 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="htmx-config" content='{"allowEval": false, "includeIndicatorStyles": false}'>
+  {#
+    UI2-06 (qa-report-ui-02.md): htmx's own default `attributesToSettle`
+    list is `["class", "style", "width", "height"]` -- when an
+    OOB-swapped element's prior DOM node carries an inline `style`
+    attribute (for example, one of this app's own `.reveal` entrance
+    animations, which sets `el.style.transitionDelay` via CSSOM --
+    that CSSOM write *is* reflected as a real `style` attribute, even
+    though setting it that way never itself violates CSP), htmx's
+    settle step briefly re-applies that old value onto the new node
+    via `setAttribute("style", ...)`, which strict CSP (`style-src
+    'self'`, no `unsafe-inline`) blocks outright. Dropping "style"
+    here stops htmx from ever attempting that -- this app sets every
+    dynamic style through CSSOM property writes already (never a
+    literal `style` attribute), so there is nothing meaningful left
+    for htmx to settle on that attribute in the first place.
+  #}
+  <meta name="htmx-config" content='{"allowEval": false, "includeIndicatorStyles": false, "attributesToSettle": ["class", "width", "height"]}'>
   <title>{% block title %}{{ t('app.name') }}{% endblock %}</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/app.css">

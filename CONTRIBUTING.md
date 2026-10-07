@@ -146,9 +146,9 @@ Gitmoji plus Conventional Commits (`:sparkles: feat: ...`, `:bug: fix: ...`,
 [`templates/commit-template.en.git.txt`](templates/commit-template.en.git.txt),
 one coherent change per commit with tests and docs
 alongside the behavior they cover, not split out into separate
-"add tests" or "update docs" commits. No AI-tool attribution or
+"add tests" or "update docs" commits. No AI-tool attribution or AI
 co-authorship credit of any kind in any commit message — this is
-enforced by a commit hook.
+enforced by a commit hook. `Co-authored-by` is for people only.
 
 ## Opening a change
 

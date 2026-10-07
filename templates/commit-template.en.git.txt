@@ -15,7 +15,8 @@ Footer (Optional, for issue references or significant changes):
     - To reference issues: Closes <issue_number>
     - For significant changes (if not indicated in the title):
         BREAKING CHANGE: <detailed explanation>
-    - You can include other metadata as needed (e.g., Signed-off-by, Co-authored-by).
+    - You can include other metadata as needed (e.g., Signed-off-by, or
+      Co-authored-by for people only; never credit AI tools).
 
 Guidelines:
 1. <gitmoji>: Select an emoji that represents the change:

@@ -29,8 +29,13 @@
   `extra_class`: an optional chart height modifier (redesign01's
   `chart--strip` for a timeline/heatmap strip; the default `.chart` is
   320px tall, matching the design's chart-card proportions).
+  `extra_data`: an optional `{name: value}` map of additional
+  `data-name="value"` attributes (F3, orchestrator QA batch F: the
+  grid chart reads its own `data-outage-threshold-v` this way, rather
+  than every caller re-building this whole element by hand for one
+  extra attribute).
 #}
-{% macro chart_with_fallback(chart_id, kind, aria_label, fallback_label, src=none, json_target=none, extra_class='') %}
+{% macro chart_with_fallback(chart_id, kind, aria_label, fallback_label, src=none, json_target=none, extra_class='', extra_data={}) %}
 <figure class="chart-figure">
   <div
     id="{{ chart_id }}"
@@ -38,6 +43,7 @@
     data-chart="{{ kind }}"
     {% if src %}data-src="{{ src }}"{% endif %}
     {% if json_target %}data-json="{{ json_target }}"{% endif %}
+    {% for key, value in extra_data.items() %}data-{{ key }}="{{ value }}" {% endfor %}
     role="img"
     aria-label="{{ aria_label }}"
   ></div>

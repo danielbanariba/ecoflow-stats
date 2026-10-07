@@ -214,9 +214,10 @@ def test_grid_series_judges_presence_against_the_configured_threshold_not_the_de
     threshold) judges absent.
 
     Pass-2 target: dropping the route's new `config=ctx.detector_config`
-    argument turns this red -- a lone 60V sample would still produce
-    one point (judged PRESENT under the 50.0 default) instead of an
-    empty list."""
+    argument turns this red -- a lone 60V sample would be judged
+    PRESENT under the hardcoded 50.0V default, producing a real
+    (non-null) voltage point instead of every bucket in range coming
+    back as an explicit gap."""
     range_start = _NOW_TS - 600
     samples = [(range_start, _reading(grid_v=60.0, grid_hz=59.9))]
     client, _db, _device_id = _client(
@@ -227,7 +228,41 @@ def test_grid_series_judges_presence_against_the_configured_threshold_not_the_de
         "/api/v1/grid/series", params={"from": range_start, "to": range_start + 600}
     )
 
-    assert response.json()["points"] == []
+    points = response.json()["points"]
+    assert len(points) == 2
+    assert all(point["grid_v_avg"] is None for point in points)
+
+
+def test_grid_series_reports_an_outage_bucket_as_an_explicit_null_point(
+    tmp_path: Path,
+) -> None:
+    """F3 (orchestrator QA batch F): a bucket with no grid-present
+    reading at all used to be skipped from `points` entirely, leaving
+    a silent hole in the time-ordered array -- with no explicit
+    `null`, the chart's own `connectNulls: false` has nothing to break
+    on, so ECharts draws a straight connecting line across the outage
+    instead of a visible gap. Pass-2: reverting the route's bucket
+    loop to `continue` on an "unavailable" bucket (the pre-fix
+    behavior) turns this red by dropping the middle bucket from
+    `points` instead of emitting it with null voltage/frequency."""
+    range_start = _NOW_TS - 900
+    samples = [
+        (range_start, _reading(grid_v=120.0, grid_hz=60.0)),  # bucket 0: present
+        (range_start + 300, _reading(grid_v=10.0, grid_hz=None)),  # bucket 1: outage
+        (range_start + 600, _reading(grid_v=121.0, grid_hz=60.0)),  # bucket 2: present
+    ]
+    client, _db, _device_id = _client(tmp_path, samples=samples)
+
+    response = client.get(
+        "/api/v1/grid/series", params={"from": range_start, "to": range_start + 900}
+    )
+
+    points = response.json()["points"]
+    assert len(points) == 3
+    assert points[0]["grid_v_avg"] == 120.0
+    assert points[1]["grid_v_avg"] is None
+    assert points[1]["grid_hz_avg"] is None
+    assert points[2]["grid_v_avg"] == 121.0
 
 
 # --- end-to-end: the real derive path persists, the real route serves --

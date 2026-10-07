@@ -214,6 +214,11 @@ const CHART_COLOR = {
   cool: "#64d2ff",
   warm: "#30d158",
   solar: "#ffd60a",
+  // F3 (orchestrator QA batch F): used to share `unknown` with the
+  // grid chart's own axis-line/split-line gray, making the frequency
+  // series invisible against its own gridlines even before the axis-
+  // scale fix below. Matches `--frequency` in app.css.
+  frequency: "#bf5af2",
   text: "rgba(245,245,247,0.85)",
   textMuted: "rgba(245,245,247,0.5)",
   axisLine: "rgba(255,255,255,0.08)",
@@ -270,6 +275,40 @@ function chartGradient(colorTop, colorBottom) {
 // sees a real gap, never a fabricated `0`.
 function round2(value) {
   return value === null || value === undefined ? value : Math.round(value * 100) / 100;
+}
+
+// F3/F4 (orchestrator QA batch F): a line chart's own y-axis left at
+// ECharts' default (forced to include 0 unless `scale: true`) flattens
+// any series whose real range sits well away from 0 -- grid voltage
+// around 120 V on a 0-140 axis, or a state-of-health percentage that
+// only moves a fraction of a point on a 0-100 axis. Computes a
+// [min, max] fitted to the series' own real values, with `paddingRatio`
+// of headroom on each side so the line never touches the plot edge;
+// a flat series (every value equal, or a single point) gets a fixed
+// absolute padding instead of a zero-width range. Returns
+// `{min: undefined, max: undefined}` for an all-null/empty series, so
+// the caller can hand that straight to an ECharts axis and fall back
+// to its own default scaling rather than a fabricated range.
+function fitAxisRange(values, paddingRatio = 0.1) {
+  const nums = values.filter((v) => v !== null && v !== undefined && !Number.isNaN(v));
+  if (nums.length === 0) {
+    return { min: undefined, max: undefined };
+  }
+  const min = Math.min(...nums);
+  const max = Math.max(...nums);
+  const span = max - min;
+  const pad = span > 0 ? span * paddingRatio : Math.max(Math.abs(max) * paddingRatio, 1);
+  return { min: min - pad, max: max + pad };
+}
+
+// F3/F4 follow-up: `fitAxisRange`'s min/max are real floating-point
+// arithmetic (a padded range's edges), so ECharts' own tick values
+// along that axis inherit binary-float noise ("118.75999999999999"
+// instead of "118.76"). Rounds a tick's label to 2 decimal places --
+// enough to show real sub-unit variation (a 0.1 Hz frequency swing,
+// a fractional state-of-health point) without the noise.
+function formatAxisTick(value) {
+  return String(Math.round(value * 100) / 100);
 }
 
 function readChartJsonData(el) {
@@ -526,6 +565,8 @@ function initBatteryTrendChart(el) {
       const days = body.days.map((day) => day.day);
       const cycles = body.days.map((day) => day.cycles_last);
       const soh = body.days.map((day) => day.soh_last);
+      const cyclesRange = fitAxisRange(cycles);
+      const sohRange = fitAxisRange(soh);
       const chart = window.echarts.init(el, null, { renderer: "svg" });
       chart.setOption({
         animation: !prefersReducedMotion(),
@@ -551,21 +592,30 @@ function initBatteryTrendChart(el) {
           {
             type: "value",
             name: "cycles",
+            // F4 (orchestrator QA batch F): fitted to this range's own
+            // cycle count instead of ECharts' default 0-forced scale,
+            // which flattened a change of a handful of cycles against
+            // a count in the hundreds.
+            min: cyclesRange.min,
+            max: cyclesRange.max,
             nameTextStyle: { color: CHART_COLOR.textMuted, fontSize: 10 },
             axisLine: { show: false },
             axisTick: { show: false },
-            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10 },
+            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10, formatter: formatAxisTick },
             splitLine: { lineStyle: { color: CHART_COLOR.splitLine } },
           },
           {
             type: "value",
             name: "SoH %",
-            min: 0,
-            max: 100,
+            // F4: a 0-100 axis flattened a state-of-health line that
+            // only ever moves a fraction of a percentage point within
+            // one range -- fitted to this range's own values instead.
+            min: sohRange.min,
+            max: sohRange.max,
             nameTextStyle: { color: CHART_COLOR.textMuted, fontSize: 10 },
             axisLine: { show: false },
             axisTick: { show: false },
-            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10 },
+            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10, formatter: formatAxisTick },
             splitLine: { show: false },
           },
         ],
@@ -678,11 +728,24 @@ function initGridSeriesChart(el) {
   if (!src) {
     return;
   }
+  // F3 (orchestrator QA batch F): the server already omits/nulls a
+  // bucket with no grid-present reading at all, but a per-sample
+  // guard here is the literal second half of the fix -- any point at
+  // or below the configured outage threshold renders as a gap
+  // (`connectNulls: false` below then draws a real break), never a
+  // value dragged down toward the threshold.
+  const thresholdV = parseFloat(el.dataset.outageThresholdV);
   fetch(src)
     .then((response) => response.json())
     .then((body) => {
-      const voltage = body.points.map((point) => [point.ts * 1000, round2(point.grid_v_avg)]);
+      const voltage = body.points.map((point) => {
+        const v = round2(point.grid_v_avg);
+        const belowThreshold = v !== null && !Number.isNaN(thresholdV) && v <= thresholdV;
+        return [point.ts * 1000, belowThreshold ? null : v];
+      });
       const frequency = body.points.map((point) => [point.ts * 1000, round2(point.grid_hz_avg)]);
+      const voltageRange = fitAxisRange(voltage.map((p) => p[1]));
+      const frequencyRange = fitAxisRange(frequency.map((p) => p[1]));
       const chart = window.echarts.init(el, null, { renderer: "svg" });
       chart.setOption({
         animation: !prefersReducedMotion(),
@@ -701,19 +764,30 @@ function initGridSeriesChart(el) {
           {
             type: "value",
             name: "V",
+            // F3: fitted to this range's own voltage instead of a
+            // 0-forced axis, which compressed a real ~109-124 V range
+            // into a sliver at the top of a 0-140 V scale.
+            min: voltageRange.min,
+            max: voltageRange.max,
             nameTextStyle: { color: CHART_COLOR.textMuted, fontSize: 10 },
             axisLine: { show: false },
             axisTick: { show: false },
-            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10 },
+            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10, formatter: formatAxisTick },
             splitLine: { lineStyle: { color: CHART_COLOR.splitLine } },
           },
           {
             type: "value",
             name: "Hz",
+            // F3: fitted the same way -- a 0-forced frequency axis sat
+            // the real ~59.95-60.05 Hz range directly on top of
+            // voltage's own line at this chart's old shared 0-based
+            // scale.
+            min: frequencyRange.min,
+            max: frequencyRange.max,
             nameTextStyle: { color: CHART_COLOR.textMuted, fontSize: 10 },
             axisLine: { show: false },
             axisTick: { show: false },
-            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10 },
+            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10, formatter: formatAxisTick },
             splitLine: { show: false },
           },
         ],
@@ -735,7 +809,10 @@ function initGridSeriesChart(el) {
             showSymbol: false,
             connectNulls: false,
             smooth: 0.3,
-            lineStyle: { width: 2, color: CHART_COLOR.unknown },
+            // F3: its own distinct color, matching `.legend-chip__dot
+            // --frequency` -- used to share `CHART_COLOR.unknown`
+            // (the same gray as the axis gridlines) with the legend.
+            lineStyle: { width: 2, color: CHART_COLOR.frequency },
             data: frequency,
           },
         ],

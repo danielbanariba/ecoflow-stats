@@ -47,6 +47,13 @@
   --solar-dim: rgba(255, 214, 10, 0.14);
   --unknown: #9a9aa0;
   --unknown-dim: rgba(154, 154, 160, 0.14);
+  /* F3 (orchestrator QA batch F): the grid chart's frequency series
+     shared `--unknown` (the same gray as the chart's own axis lines)
+     with its legend dot, so it was invisible against the gridlines
+     even before the axis-scale defect was fixed. A dedicated color
+     keeps voltage and frequency visually distinct from each other and
+     from the neutral/unknown palette. */
+  --frequency: #bf5af2;
 
   /* ambient glows (blurred radial gradients, fixed behind content) */
   --glow-green: radial-gradient(circle, rgba(48, 209, 88, 0.32) 0%, rgba(48, 209, 88, 0) 70%);
@@ -1049,6 +1056,24 @@ section + section {
 
 .legend-chip__dot--unknown {
   background: var(--unknown);
+}
+
+.legend-chip__dot--frequency {
+  background: var(--frequency);
+}
+
+/* F4 (orchestrator QA batch F): the battery trend chart's legend
+   markup already referenced these two modifiers (`battery.html`), but
+   neither was ever defined -- both dots fell back to the base
+   `.legend-chip__dot`'s gray `--text-muted`, matching neither the
+   cycles line (`--solar`) nor the state-of-health line
+   (`--battery-warm`) it sits beside. */
+.legend-chip__dot--solar {
+  background: var(--solar);
+}
+
+.legend-chip__dot--warm {
+  background: var(--battery-warm);
 }
 
 /* ---------- Details fallback (data tables for a11y / no-JS) ---------- */

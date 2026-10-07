@@ -608,10 +608,28 @@ def grid_series_route(
     for row in ctx.sample_store.between(device_id, range_start, range_end):
         bucket_start = range_start + ((row.ts - range_start) // bucket_width_s) * bucket_width_s
         buckets.setdefault(bucket_start, []).append((row.ts, row.reading))
+    # F3 (orchestrator QA batch F): walks every bucket in the requested
+    # range, not just the ones with at least one grid-present reading
+    # -- an outage bucket used to be skipped from `points` entirely,
+    # leaving a silent hole in the time-ordered array with no explicit
+    # `null` for the chart's own `connectNulls: false` to break on, so
+    # the line drew straight across the outage instead of a visible
+    # gap. An explicit null-valued point here is that gap.
     points = []
-    for bucket_start in sorted(buckets):
-        quality = grid_quality_range(buckets[bucket_start], config=ctx.detector_config)
+    for bucket_start in range(range_start, range_end, bucket_width_s):
+        quality = grid_quality_range(buckets.get(bucket_start, []), config=ctx.detector_config)
         if quality == "unavailable":
+            points.append(
+                {
+                    "ts": bucket_start,
+                    "grid_v_min": None,
+                    "grid_v_avg": None,
+                    "grid_v_max": None,
+                    "grid_hz_min": None,
+                    "grid_hz_avg": None,
+                    "grid_hz_max": None,
+                }
+            )
             continue
         points.append(
             {

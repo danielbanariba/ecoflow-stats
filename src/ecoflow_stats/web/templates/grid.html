@@ -65,10 +65,10 @@
       </p>
       <div class="legend-row">
         <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--present"></span>{{ t('grid.chart.legend.voltage') }}</span>
-        <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--unknown"></span>{{ t('grid.chart.legend.frequency') }}</span>
+        <span class="legend-chip"><span class="legend-chip__dot legend-chip__dot--frequency"></span>{{ t('grid.chart.legend.frequency') }}</span>
       </div>
     </div>
-    {% call macros.chart_with_fallback('grid-series-chart', 'grid-series', t('grid.chart.aria_label'), t('chart.fallback_label'), src=view.series_src) %}
+    {% call macros.chart_with_fallback('grid-series-chart', 'grid-series', t('grid.chart.aria_label'), t('chart.fallback_label'), src=view.series_src, extra_data={'outage-threshold-v': view.threshold_v}) %}
       {% if view.daily_rows %}
       <table>
         <thead>

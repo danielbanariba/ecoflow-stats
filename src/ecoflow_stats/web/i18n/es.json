@@ -137,7 +137,7 @@
   "battery.dod.table.value": "Profundidad de descarga",
   "battery.dod.value": "{points}%",
   "battery.dod.empty": "No se registraron cortes en este rango.",
-  "battery.autonomy.heading": "Autonomía observada frente a la estimación del dispositivo",
+  "battery.autonomy.heading": "Autonomía proyectada frente a la estimación del dispositivo",
   "battery.autonomy.table.start": "Inicio",
   "battery.autonomy.table.end": "Fin",
   "battery.autonomy.table.projected": "Proyectada según la tasa observada",

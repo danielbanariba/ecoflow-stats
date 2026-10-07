@@ -51,9 +51,10 @@ time as a single colored band.
 ### Battery
 
 State of charge over time, depth of discharge per outage, cycle count and
-state-of-health trend, and observed autonomy (how long the battery actually
-carried the load during an outage) compared against the device's own
-remaining-time estimate.
+state-of-health trend, and projected autonomy (how long the battery would
+have lasted from its charge at the start of each outage, at the discharge
+rate observed during it) compared against the device's own remaining-time
+estimate.
 
 ![Battery page](docs/images/battery.png)
 

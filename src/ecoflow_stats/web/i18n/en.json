@@ -137,7 +137,7 @@
   "battery.dod.table.value": "Depth of discharge",
   "battery.dod.value": "{points}%",
   "battery.dod.empty": "No outages recorded in this range.",
-  "battery.autonomy.heading": "Observed autonomy vs. device estimate",
+  "battery.autonomy.heading": "Projected autonomy vs. device estimate",
   "battery.autonomy.table.start": "Start",
   "battery.autonomy.table.end": "End",
   "battery.autonomy.table.projected": "Projected at observed rate",

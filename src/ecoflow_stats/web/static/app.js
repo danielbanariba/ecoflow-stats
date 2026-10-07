@@ -289,7 +289,13 @@ function round2(value) {
 // `{min: undefined, max: undefined}` for an all-null/empty series, so
 // the caller can hand that straight to an ECharts axis and fall back
 // to its own default scaling rather than a fabricated range.
-function fitAxisRange(values, paddingRatio = 0.1) {
+//
+// `minSpan` keeps a tiny change from filling the whole plot: a 0.05
+// point state-of-health drop on a range fitted only to the data reads
+// as a cliff. When the padded range is narrower than `minSpan`, the
+// axis is widened to `minSpan` around the data's midpoint. `ceiling`
+// shifts the range down when it would pass a hard limit (100 %).
+function fitAxisRange(values, { minSpan = 0, ceiling = Infinity, paddingRatio = 0.1 } = {}) {
   const nums = values.filter((v) => v !== null && v !== undefined && !Number.isNaN(v));
   if (nums.length === 0) {
     return { min: undefined, max: undefined };
@@ -297,8 +303,22 @@ function fitAxisRange(values, paddingRatio = 0.1) {
   const min = Math.min(...nums);
   const max = Math.max(...nums);
   const span = max - min;
-  const pad = span > 0 ? span * paddingRatio : Math.max(Math.abs(max) * paddingRatio, 1);
-  return { min: min - pad, max: max + pad };
+  let lo;
+  let hi;
+  if (span * (1 + 2 * paddingRatio) < minSpan) {
+    const mid = (min + max) / 2;
+    lo = mid - minSpan / 2;
+    hi = mid + minSpan / 2;
+  } else {
+    const pad = span > 0 ? span * paddingRatio : Math.max(Math.abs(max) * paddingRatio, 1);
+    lo = min - pad;
+    hi = max + pad;
+  }
+  if (hi > ceiling) {
+    lo -= hi - ceiling;
+    hi = ceiling;
+  }
+  return { min: lo, max: hi };
 }
 
 // F3/F4 follow-up: `fitAxisRange`'s min/max are real floating-point
@@ -306,7 +326,9 @@ function fitAxisRange(values, paddingRatio = 0.1) {
 // along that axis inherit binary-float noise ("118.75999999999999"
 // instead of "118.76"). Rounds a tick's label to 2 decimal places --
 // enough to show real sub-unit variation (a 0.1 Hz frequency swing,
-// a fractional state-of-health point) without the noise.
+// a fractional state-of-health point) without the noise. The fitted
+// axes also hide their edge labels, which sit on the padded range
+// ends ("125.13") rather than on a round tick.
 function formatAxisTick(value) {
   return String(Math.round(value * 100) / 100);
 }
@@ -565,8 +587,8 @@ function initBatteryTrendChart(el) {
       const days = body.days.map((day) => day.day);
       const cycles = body.days.map((day) => day.cycles_last);
       const soh = body.days.map((day) => day.soh_last);
-      const cyclesRange = fitAxisRange(cycles);
-      const sohRange = fitAxisRange(soh);
+      const cyclesRange = fitAxisRange(cycles, { minSpan: 10 });
+      const sohRange = fitAxisRange(soh, { minSpan: 5, ceiling: 100 });
       const chart = window.echarts.init(el, null, { renderer: "svg" });
       chart.setOption({
         animation: !prefersReducedMotion(),
@@ -601,7 +623,7 @@ function initBatteryTrendChart(el) {
             nameTextStyle: { color: CHART_COLOR.textMuted, fontSize: 10 },
             axisLine: { show: false },
             axisTick: { show: false },
-            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10, formatter: formatAxisTick },
+            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10, formatter: formatAxisTick, showMinLabel: false, showMaxLabel: false },
             splitLine: { lineStyle: { color: CHART_COLOR.splitLine } },
           },
           {
@@ -615,7 +637,7 @@ function initBatteryTrendChart(el) {
             nameTextStyle: { color: CHART_COLOR.textMuted, fontSize: 10 },
             axisLine: { show: false },
             axisTick: { show: false },
-            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10, formatter: formatAxisTick },
+            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10, formatter: formatAxisTick, showMinLabel: false, showMaxLabel: false },
             splitLine: { show: false },
           },
         ],
@@ -744,8 +766,8 @@ function initGridSeriesChart(el) {
         return [point.ts * 1000, belowThreshold ? null : v];
       });
       const frequency = body.points.map((point) => [point.ts * 1000, round2(point.grid_hz_avg)]);
-      const voltageRange = fitAxisRange(voltage.map((p) => p[1]));
-      const frequencyRange = fitAxisRange(frequency.map((p) => p[1]));
+      const voltageRange = fitAxisRange(voltage.map((p) => p[1]), { minSpan: 10 });
+      const frequencyRange = fitAxisRange(frequency.map((p) => p[1]), { minSpan: 1 });
       const chart = window.echarts.init(el, null, { renderer: "svg" });
       chart.setOption({
         animation: !prefersReducedMotion(),
@@ -772,7 +794,7 @@ function initGridSeriesChart(el) {
             nameTextStyle: { color: CHART_COLOR.textMuted, fontSize: 10 },
             axisLine: { show: false },
             axisTick: { show: false },
-            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10, formatter: formatAxisTick },
+            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10, formatter: formatAxisTick, showMinLabel: false, showMaxLabel: false },
             splitLine: { lineStyle: { color: CHART_COLOR.splitLine } },
           },
           {
@@ -787,7 +809,7 @@ function initGridSeriesChart(el) {
             nameTextStyle: { color: CHART_COLOR.textMuted, fontSize: 10 },
             axisLine: { show: false },
             axisTick: { show: false },
-            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10, formatter: formatAxisTick },
+            axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10, formatter: formatAxisTick, showMinLabel: false, showMaxLabel: false },
             splitLine: { show: false },
           },
         ],

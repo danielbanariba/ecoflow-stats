@@ -141,8 +141,10 @@ placeholder in both files than by a missing key in one.
 
 ## Commit conventions
 
-Conventional Commits (`feat: ...`, `fix: ...`, `docs: ...`, `test: ...`,
-`refactor: ...`), one coherent change per commit with tests and docs
+Gitmoji plus Conventional Commits (`:sparkles: feat: ...`, `:bug: fix: ...`,
+`:memo: docs: ...`), following
+[`templates/commit-template.en.git.txt`](templates/commit-template.en.git.txt),
+one coherent change per commit with tests and docs
 alongside the behavior they cover, not split out into separate
 "add tests" or "update docs" commits. No AI-tool attribution or
 co-authorship credit of any kind in any commit message — this is
@@ -154,4 +156,5 @@ enforced by a commit hook.
 2. Make your change with tests first, keeping the suite green.
 3. Run the full verification gate: `uv run pytest -q`, `uv run ruff check .`,
    `uv run ruff format --check .`.
-4. Open a pull request describing what changed and why.
+4. Open a pull request describing what changed and why, using
+   [`.github/pull_request_template.md`](.github/pull_request_template.md).

@@ -47,11 +47,11 @@
     <p class="mt-6 text-muted">{{ t('common.unavailable') }}</p>
     {% endif %}
   </div>
-  <div class="tile tile--span-4 reveal">
+  <div class="tile tile--span-4 tile--row-2 tile--center reveal">
     <p class="stat-tile__label">{{ t('battery.trend.table.soh') }}</p>
     <p class="stat-tile__value stat-tile--accent-battery">{% if view.current_soh is not none %}<span class="num">{{ view.current_soh }}%</span>{% else %}{{ t('common.unavailable') }}{% endif %}</p>
   </div>
-  <div class="tile tile--span-4 reveal">
+  <div class="tile tile--span-4 tile--row-2 tile--center reveal">
     <p class="stat-tile__label">{{ t('battery.trend.table.cycles') }}</p>
     <p class="stat-tile__value">{% if view.current_cycles is not none %}<span class="num">{{ view.current_cycles }}</span>{% else %}{{ t('common.unavailable') }}{% endif %}</p>
   </div>

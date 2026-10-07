@@ -618,6 +618,22 @@ section + section {
   flex-direction: column;
 }
 
+/* F7 (orchestrator QA batch F): the battery page's top bento paired
+   one `.tile--row-2` ("Right now") with two plain single-row tiles
+   (state of health, cycles) -- CSS Grid only grows a row to fit items
+   actually placed in it, so the two short tiles left a tall empty
+   block under themselves, the same height as "Right now"'s own second
+   row. Adding `.tile--row-2` to those two as well makes every tile in
+   the row span the same two rows (grid's default `align-items:
+   stretch` then fills that full height for all three); `.tile--center`
+   vertically centers each short label/value pair within its own
+   now-taller card instead of leaving it pinned to the top with empty
+   space below -- balance without an inline style. */
+.tile--center {
+  justify-content: center;
+  gap: var(--space-5);
+}
+
 @media (max-width: 900px) {
   .bento {
     grid-template-columns: repeat(2, 1fr);

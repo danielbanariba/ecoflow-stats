@@ -20,6 +20,20 @@ def anyio_backend() -> str:
 
 
 @pytest.fixture(autouse=True)
+def _ignore_the_runners_timezone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run every test as if the machine had no ``TZ`` set.
+
+    `config.load_settings` falls back to the ``TZ`` environment variable
+    when ``ECOFLOW_STATS_TZ`` is unset, and most fixtures build settings
+    from `os.environ`. Without this, local-day boundaries in page tests
+    follow the developer's own timezone, and tests that pass in CI fail
+    on a machine set to, say, ``Asia/Tokyo``. A test that needs a
+    timezone sets ``ECOFLOW_STATS_TZ`` (or ``TZ``) explicitly.
+    """
+    monkeypatch.delenv("TZ", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _restore_global_logging_state() -> Iterator[None]:
     """Snapshot and restore process-wide `logging` state around every test.
 

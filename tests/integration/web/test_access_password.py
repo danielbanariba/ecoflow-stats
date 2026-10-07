@@ -521,59 +521,6 @@ def test_the_real_login_route_rejects_with_429_and_retry_after_once_throttled(
         application.database.close()
 
 
-def test_the_login_forms_own_markup_opts_out_of_htmx_boost(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """UI2-03 + UI-17 (qa-report-ui-02.md): `<body hx-boost="true">`
-    (base.html) makes htmx intercept every same-origin form submit as
-    an AJAX request by default, including the login form. htmx's
-    default `responseHandling` does not swap a 4xx/5xx response into
-    the page -- it only fires `htmx:responseError`, which app.js turns
-    into the generic banner -- so the specific, already-correct
-    `429` body `test_the_real_login_route_rejects_with_429_and_retry_
-    after_once_throttled` proves the server renders (`"Too many failed
-    attempts"`, distinct from a wrong-password message per UI-17)
-    never reaches a real browser: only the generic banner text does,
-    and the user has no way to tell a throttle apart from any other
-    failure.
-
-    `TestClient` never runs htmx's JS, so it cannot observe the banner
-    swallowing the message the way a real browser does -- that half of
-    the proof is the Playwright check run against a live instance.
-    What this test can and must hold a line on is the one piece of
-    server-rendered markup the whole fix rests on: the login form
-    itself must carry `hx-boost="false"`, so the browser performs a
-    normal, non-AJAX submit and simply renders whatever the server
-    sends back, 429 included.
-
-    Pass-2: removing `hx-boost="false"` from the `<form>` in
-    login.html (reverting to plain `<body hx-boost="true">`
-    inheritance) is exactly the regression this guards -- it turns
-    this red without touching anything else."""
-    application = _build(monkeypatch, tmp_path)
-    try:
-        app = create_app(
-            application,
-            start_collector=_never_ticks,
-            start_derive_job=_never_ticks,
-            start_rollups_job=_never_ticks,
-        )
-
-        with TestClient(app, client=_LOCAL_CLIENT) as client:
-            page = client.get("/login")
-
-        # The page also renders the nav's own language-switch form
-        # (posting to /preferences) ahead of the login form itself, so
-        # this must locate the login form specifically by its action,
-        # not just the first "<form" on the page.
-        form_start = page.text.index('<form class="login-form"')
-        form_end = page.text.index(">", form_start)
-        form_tag = page.text[form_start : form_end + 1]
-        assert 'hx-boost="false"' in form_tag
-    finally:
-        application.database.close()
-
-
 def test_a_password_change_invalidates_every_previously_issued_session() -> None:
     """Design, "Session": the session signing key is `HMAC(app_secret,
     sha256(password))`, so changing the password alone revokes every

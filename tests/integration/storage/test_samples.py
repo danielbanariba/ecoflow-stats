@@ -166,6 +166,24 @@ def test_earliest_ts_returns_the_minimum_ts_across_every_recorded_sample(tmp_pat
         db.close()
 
 
+def test_earliest_ts_ignores_another_devices_older_samples(tmp_path: Path) -> None:
+    """With several configured devices, one device's history start must
+    never come from another device's samples. Pass-1/Pass-2: dropping
+    the `device_id` filter from `earliest_ts` would return the other
+    device's older timestamp here, and the energy page would then rank
+    this device's partial first day as if it were fully covered."""
+    store, db, device_id = _store(tmp_path)
+    try:
+        other = DeviceStore(db.writer).upsert(
+            sn="BA31ZEB1SF7F0002", adapter_id="delta_pro", created_at=1
+        )
+        store.add(other.id, 50, 1, Reading(soc=5))
+        store.add(device_id, 500, 1, Reading(soc=50))
+        assert store.earliest_ts(device_id) == 500
+    finally:
+        db.close()
+
+
 def test_earliest_ts_returns_none_when_no_samples_exist(tmp_path: Path) -> None:
     """A device with no recorded sample at all has no observed history
     yet -- `None`, never a fabricated `0` that would make `timeutil.

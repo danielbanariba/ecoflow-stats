@@ -54,12 +54,14 @@ from ecoflow_stats.web.security import (
 )
 from ecoflow_stats.web.views import (
     OverviewViewModel,
+    PowerChartViewModel,
     build_battery_view_model,
     build_energy_view_model,
     build_grid_view_model,
     build_outages_summary,
     build_outages_view_model,
     build_overview_view_model,
+    build_power_chart_view_model,
     format_compact_local_dt,
     format_duration,
     format_hours_duration,
@@ -104,6 +106,12 @@ _OVERVIEW_OUTAGES_WINDOW_S = 30 * 24 * 60 * 60
 """Fixed 30-day lookback for the overview's outage tiles (UI-04/UI-05,
 qa-report-ui-01.md) -- unlike `outages_page`, the overview has no
 `from`/`to` range selector, so this window is not user-adjustable."""
+
+
+_OVERVIEW_POWER_WINDOW_S = 24 * 60 * 60
+"""The overview AC-load chart's rolling window (and its fallback table's
+span). Fixed, like `_OVERVIEW_OUTAGES_WINDOW_S`: the overview has no
+`from`/`to` range selector."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,6 +225,27 @@ def _live_view(
     )
 
 
+def _power_chart_view(ctx: PagesContext, device_id: int) -> PowerChartViewModel:
+    """The overview's AC-load chart card. The chart itself fetches
+    `power/series` client-side; this only builds its source URL and the
+    no-JS fallback table. The table's 24 hourly rows end at the next hour
+    boundary (so the last row is the current, partial hour) rather than
+    at `now`, which keeps each row on a whole clock hour."""
+    now_ts = int(ctx.now().timestamp())
+    range_end = (now_ts // 3_600 + 1) * 3_600
+    range_start = range_end - _OVERVIEW_POWER_WINDOW_S
+    samples = (
+        (row.ts, row.reading) for row in ctx.sample_store.between(device_id, range_start, range_end)
+    )
+    return build_power_chart_view_model(
+        samples=samples,
+        range_start=range_start,
+        range_end=range_end,
+        series_src=f"/api/v1/power/series?device={device_id}",
+        window_s=_OVERVIEW_POWER_WINDOW_S,
+    )
+
+
 @router.get("/", response_class=HTMLResponse)
 def overview_page(request: Request, device: int | None = None) -> HTMLResponse:
     ctx: PagesContext = request.app.state.pages
@@ -234,6 +263,7 @@ def overview_page(request: Request, device: int | None = None) -> HTMLResponse:
             "lang": lang,
             "html_lang": html_lang(lang),
             "view": view,
+            "power": _power_chart_view(ctx, selected_id),
             "tz": api_ctx.tz,
             "csrf_token": csrf_token(security.app_secret, csrf_cookie),
             "active_nav": "overview",

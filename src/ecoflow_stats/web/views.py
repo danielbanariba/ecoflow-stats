@@ -24,10 +24,11 @@ from ecoflow_stats.battery.stats import (
     soc_history,
     summarize_battery_trend,
 )
+from ecoflow_stats.power.series import ac_load_series
 from ecoflow_stats.timeutil import duration_parts, local_day, period_end_ts, period_start_ts
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterable, Sequence
 
     from ecoflow_stats.battery.stats import DailyBatteryTrend
     from ecoflow_stats.devices.reading import Reading
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
     from ecoflow_stats.outages.aggregates import OutageAggregates
     from ecoflow_stats.outages.model import Event, Gap
     from ecoflow_stats.outages.resolve import EffectiveOutage
+    from ecoflow_stats.power.series import AcLoadPoint
     from ecoflow_stats.storage.devices import DeviceRecord
     from ecoflow_stats.storage.rollups import DailyGridRollup
 
@@ -933,6 +935,57 @@ def build_grid_view_model(
     )
 
 
+_POWER_TABLE_BUCKET_S = 3_600
+"""The overview AC-load chart's no-JS fallback table is hourly -- a
+readable 24 rows, where the chart itself plots every minute."""
+
+
+@dataclass(frozen=True, slots=True)
+class PowerChartViewModel:
+    """Everything the overview's AC-load chart card renders."""
+
+    series_src: str
+    """The chart's `data-src`: the device's `power/series` URL with no
+    `from`/`to`, since `app.js` appends a rolling window on every
+    refresh."""
+    window_s: int
+    """The chart's rolling window, handed to `app.js` as `data-window-s`."""
+    hourly_rows: tuple[AcLoadPoint, ...]
+    """The fallback table, one row per hour of the window, oldest first.
+    An hour without a reading carries `None` average and peak."""
+    has_readings: bool
+    """Whether any hour holds a reading. `False` swaps the table for an
+    explicit empty-state line (a real 0 W reading still counts)."""
+
+
+def build_power_chart_view_model(
+    *,
+    samples: Iterable[tuple[int, Reading]],
+    range_start: int,
+    range_end: int,
+    series_src: str,
+    window_s: int,
+) -> PowerChartViewModel:
+    """The overview's AC-load card: the chart's source URL and window, and
+    the fallback table's hourly rows -- the same `ac_load_series` the
+    JSON route uses, at 3600 s buckets, so the table and the chart never
+    disagree about how a bucket's average or peak is computed."""
+    hourly_rows = tuple(
+        ac_load_series(
+            samples,
+            range_start=range_start,
+            range_end=range_end,
+            bucket_width_s=_POWER_TABLE_BUCKET_S,
+        )
+    )
+    return PowerChartViewModel(
+        series_src=series_src,
+        window_s=window_s,
+        hourly_rows=hourly_rows,
+        has_readings=any(row.ac_out_w_avg is not None for row in hourly_rows),
+    )
+
+
 __all__ = [
     "BatteryAutonomyRow",
     "BatteryChargePoint",
@@ -950,6 +1003,7 @@ __all__ = [
     "OutagesSummary",
     "OutagesViewModel",
     "OverviewViewModel",
+    "PowerChartViewModel",
     "build_battery_autonomy_row",
     "build_battery_dod_row",
     "build_battery_view_model",
@@ -962,6 +1016,7 @@ __all__ = [
     "build_outages_summary",
     "build_outages_view_model",
     "build_overview_view_model",
+    "build_power_chart_view_model",
     "device_label",
     "format_local_dt",
     "format_period_label",

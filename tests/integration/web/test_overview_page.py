@@ -401,3 +401,84 @@ def test_the_overview_never_shows_a_missing_value_as_a_fabricated_zero(
         assert html.count("Unavailable") >= 4  # solar/grid-in/AC-out/battery-power/SoH/cycles
     finally:
         application.database.close()
+
+
+def _overview_html(application: bootstrap.Application) -> str:
+    app = create_app(
+        application,
+        start_collector=_never_ticks,
+        start_derive_job=_never_ticks,
+        start_rollups_job=_never_ticks,
+    )
+    with TestClient(app) as client:
+        return client.get("/").text
+
+
+def test_the_overview_renders_the_ac_load_chart_wired_to_the_power_series_endpoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Pass-1: catches the chart card going missing, `app.js` being given
+    a source for the wrong device, or the page forgetting to load ECharts
+    -- `initCharts` returns silently when `window.echarts` is undefined,
+    so the chart would just never draw with no error anywhere. Pass-2:
+    dropping the `device` query param from the page's `series_src`, or
+    removing the echarts `<script>` from `overview.html`, turns this red."""
+    application = _build(monkeypatch, tmp_path, devices="TESTDEV0001")
+    try:
+        (device,) = application.device_records
+
+        html = _overview_html(application)
+
+        assert 'data-chart="power-series"' in html
+        assert f'data-src="/api/v1/power/series?device={device.id}"' in html
+        assert 'data-window-s="86400"' in html
+        assert '<script src="/static/vendor/echarts.min.js" defer></script>' in html
+    finally:
+        application.database.close()
+
+
+def test_the_overview_fallback_table_lists_the_hourly_average_and_peak_of_the_last_24_hours(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Pass-1: catches the no-JS fallback table averaging the wrong
+    field, reporting the average as the peak, putting a reading in the
+    wrong hour, or listing samples from before the 24-hour window.
+    Pass-2: rendering the average in the peak column, or widening
+    `_OVERVIEW_POWER_WINDOW_S` to 7 days, turns this red."""
+    application = _build(monkeypatch, tmp_path, devices="TESTDEV0001")
+    try:
+        (device,) = application.device_records
+        hour = _NOW_TS - 3600  # 11:00 UTC; the fixed clock reads 12:00
+        for offset, watts in ((600, 200.0), (1_200, 600.0), (1_800, 100.0)):
+            application.sample_store.add(device.id, hour + offset, 1, Reading(ac_out_w=watts))
+        # 25 hours ago: outside the last-24-hours window.
+        application.sample_store.add(device.id, _NOW_TS - 25 * 3600, 1, Reading(ac_out_w=777.0))
+        application.database.writer.commit()
+
+        html = _overview_html(application)
+
+        row = re.search(r"<tr>\s*<td>2026-01-01 11:00</td>(.*?)</tr>", html, re.DOTALL)
+        assert row is not None
+        cells = re.findall(r'<td class="num">(.*?)</td>', row.group(1))
+        assert cells == ["300", "600"]  # average, peak
+        assert "2025-12-31 11:00" not in html
+    finally:
+        application.database.close()
+
+
+def test_the_overview_fallback_says_so_when_no_ac_load_was_recorded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Web-ui "Empty and Stale States Are Shown Explicitly", for the new
+    chart: 24 rows of "Unavailable" under a chart that has nothing to
+    draw would look like a rendering bug. Pass-2: rendering the table
+    whenever there are rows, instead of only when some hour holds a
+    reading, turns this red."""
+    application = _build(monkeypatch, tmp_path, devices="TESTDEV0001")
+    try:
+        html = _overview_html(application)
+
+        assert "No AC load readings in the last 24 hours." in html
+        assert "<table" not in html
+    finally:
+        application.database.close()

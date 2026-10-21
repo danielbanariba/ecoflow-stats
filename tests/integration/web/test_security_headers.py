@@ -179,6 +179,30 @@ def test_cache_control_no_store_is_not_forced_onto_static_assets(
         application.database.close()
 
 
+def test_static_assets_must_be_revalidated_before_reuse(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Real deployment defect: `/static/*` went out with an ETag and a
+    Last-Modified but no `Cache-Control`, under fixed URLs such as
+    `/static/app.js`. The browser applied heuristic freshness and kept
+    running the pre-deploy `app.js` without asking the server, so a new
+    Overview chart rendered as an empty card until a hard reload.
+    Pass-1/Pass-2: dropping the static branch of
+    `SecurityHeadersMiddleware` (back to no `Cache-Control` at all)
+    turns this red."""
+    application = _build(monkeypatch, tmp_path)
+    try:
+        app = _app(application)
+
+        with TestClient(app) as client:
+            response = client.get("/static/app.js")
+
+        assert response.status_code == 200
+        assert response.headers.get("cache-control") == "no-cache"
+    finally:
+        application.database.close()
+
+
 def test_x_frame_options_deny_is_present(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Pass-1 (POLISH-01): defense-in-depth alongside the existing CSP
     `frame-ancestors 'none'`, for a legacy browser that does not honor

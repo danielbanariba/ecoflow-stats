@@ -551,6 +551,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             # `/static/*` is exempt: those assets are genuinely safe,
             # and meant, to cache.
             response.headers["cache-control"] = "no-store"
+        else:
+            # `/static/*` keeps fixed URLs across deploys, so without an
+            # explicit policy the browser applies heuristic freshness
+            # and keeps running a stale `app.js` after an upgrade.
+            # `no-cache` still stores the asset but revalidates it on
+            # every use, which costs a 304 against the ETag.
+            response.headers["cache-control"] = "no-cache"
         return response
 
 

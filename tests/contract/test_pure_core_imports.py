@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 SRC_ROOT = Path(__file__).resolve().parent.parent.parent / "src" / "ecoflow_stats"
-PURE_CORE_PACKAGES = ("devices", "outages", "energy", "battery", "grid")
+PURE_CORE_PACKAGES = ("devices", "outages", "energy", "battery", "grid", "power")
 BANNED_MODULES = frozenset({"sqlite3", "httpx", "fastapi", "starlette", "jinja2", "storage", "web"})
 BANNED_PACKAGE_PREFIXES = frozenset(
     {

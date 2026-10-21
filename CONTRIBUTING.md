@@ -58,12 +58,13 @@ missing.
 ## Architecture: hexagonal, pure core
 
 The source tree under `src/ecoflow_stats/` is organized by capability
-(`devices`, `outages`, `energy`, `battery`, `grid`, `acquisition`,
-`history_import`, `notifications`, `live_status`, `web`, `storage`), not
+(`devices`, `outages`, `energy`, `battery`, `grid`, `power`,
+`acquisition`, `history_import`, `notifications`, `live_status`, `web`,
+`storage`), not
 by layer. Inside each capability package, the split that matters is:
 
-- **Pure core** — `devices`, `outages`, `energy`, `battery`, `grid`: no
-  I/O. These packages may not import `sqlite3`, `httpx`, `fastapi`,
+- **Pure core** — `devices`, `outages`, `energy`, `battery`, `grid`,
+  `power`: no I/O. These packages may not import `sqlite3`, `httpx`, `fastapi`,
   `starlette`, `jinja2`, or any of this project's own I/O-boundary
   packages (`storage`, `acquisition`, `web`, `notifications`,
   `history_import`, `bootstrap`, `jobs`, `cli`) — by their bare name or by

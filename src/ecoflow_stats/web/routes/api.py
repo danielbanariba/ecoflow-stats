@@ -29,6 +29,7 @@ from ecoflow_stats.grid.quality import grid_quality_range
 from ecoflow_stats.live_status.service import get_status
 from ecoflow_stats.outages.aggregates import compute_aggregates
 from ecoflow_stats.outages.resolve import resolve, unresolved_gaps
+from ecoflow_stats.power.series import ac_load_series
 from ecoflow_stats.rollups.service import decode_energy_flags
 from ecoflow_stats.storage.legacy import LegacyStore
 from ecoflow_stats.storage.rollups import RollupStore
@@ -61,6 +62,7 @@ _BATTERY_TRENDS_SCHEMA = "ecoflow-stats.battery-trends/v1"
 _BATTERY_OUTAGES_SCHEMA = "ecoflow-stats.battery-outages/v1"
 _GRID_SERIES_SCHEMA = "ecoflow-stats.grid-series/v1"
 _GRID_DAILY_SCHEMA = "ecoflow-stats.grid-daily/v1"
+_POWER_SERIES_SCHEMA = "ecoflow-stats.power-series/v1"
 _ENERGY_DAILY_SCHEMA = "ecoflow-stats.energy-daily/v1"
 _DEFAULT_RANGE_S = 7 * 24 * 60 * 60
 """The range query defaults to the trailing 7 days when `from`/`to` are
@@ -70,6 +72,16 @@ _PRESENT, _ABSENT, _UNKNOWN = "present", "absent", "unknown"
 _GRID_BUCKET_TIERS: tuple[tuple[int | None, int], ...] = ((7, 300), (90, 3_600), (None, 86_400))
 """`grid/series`'s chart-resolution tiers (task 20.3): 5 min for a
 range of 7 days or less, 1 h for up to 90 days, 1 day beyond that."""
+
+_POWER_BUCKET_TIERS: tuple[tuple[int | None, int], ...] = (
+    (1, 60),
+    (7, 300),
+    (90, 3_600),
+    (None, 86_400),
+)
+"""`power/series`'s chart-resolution tiers: 1 min for a range of 1 day or
+less (the collector's own sample cadence, so a short render shows every
+reading), then the same 5 min / 1 h / 1 day steps as `grid/series`."""
 
 ENERGY_GRANULARITY_TIERS: tuple[tuple[int | None, str], ...] = ((90, "daily"), (None, "monthly"))
 """`energy/daily`'s aggregation-granularity tiers (task 19.1): daily
@@ -648,6 +660,42 @@ def grid_series_route(
         "range": {"start": range_start, "end": range_end},
         "bucket_width_s": bucket_width_s,
         "points": points,
+    }
+    return JSONResponse(body)
+
+
+@router.get("/api/v1/power/series")
+def power_series_route(
+    request: Request,
+    device: int | None = None,
+    start: int | None = Query(None, alias="from"),
+    end: int | None = Query(None, alias="to"),
+) -> JSONResponse:
+    """The AC-load chart's bucketed data source: average and peak
+    ``ac_out_w`` per bucket, at 1 min for a range of a day or less, then
+    coarser tiers (``_POWER_BUCKET_TIERS``), computed fresh from raw
+    samples. Every bucket in the range is returned; one with no reported
+    ``ac_out_w`` carries explicit nulls so the chart breaks there instead
+    of interpolating."""
+    ctx: ApiContext = request.app.state.api
+    device_id = _resolve_device_id(ctx, device)
+    range_start, range_end = _resolve_range(ctx, start, end)
+    bucket_width_s = select_bucket(range_start, range_end, _POWER_BUCKET_TIERS)
+    points = ac_load_series(
+        (
+            (row.ts, row.reading)
+            for row in ctx.sample_store.between(device_id, range_start, range_end)
+        ),
+        range_start=range_start,
+        range_end=range_end,
+        bucket_width_s=bucket_width_s,
+    )
+    body = {
+        "schema": _POWER_SERIES_SCHEMA,
+        "device_id": device_id,
+        "range": {"start": range_start, "end": range_end},
+        "bucket_width_s": bucket_width_s,
+        "points": [dataclasses.asdict(point) for point in points],
     }
     return JSONResponse(body)
 

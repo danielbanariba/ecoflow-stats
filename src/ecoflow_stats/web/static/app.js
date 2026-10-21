@@ -846,6 +846,113 @@ function initGridSeriesChart(el) {
     });
 }
 
+// The overview's AC-load chart is the one chart that keeps itself
+// current. `data-src` carries no range: every tick asks for the
+// trailing `data-window-s` seconds ending now, and the single chart
+// instance built here is updated in place (no page reload, no new
+// instance per tick). A bucket with no reading arrives as an explicit
+// null point, and `connectNulls: false` draws it as a real break --
+// never an interpolated line.
+//
+// The refresh timer ends itself once the element leaves the document (a
+// boosted body swap such as the language switch replaces the page, and
+// `initCharts` then builds a fresh chart for the new element), so a
+// swapped-out page never leaks an interval, a resize listener, or a
+// chart instance.
+const POWER_REFRESH_MS = 60 * 1000;
+
+function initPowerSeriesChart(el) {
+  const src = el.dataset.src;
+  const windowS = parseInt(el.dataset.windowS, 10);
+  if (!src || Number.isNaN(windowS)) {
+    return;
+  }
+  const seriesName = el.dataset.seriesName || "AC load";
+  const chart = window.echarts.init(el, null, { renderer: "svg" });
+  chart.setOption({
+    animation: !prefersReducedMotion(),
+    animationDuration: 800,
+    animationEasing: "cubicOut",
+    tooltip: { ...CHART_TOOLTIP_BASE, trigger: "axis" },
+    grid: { left: 8, right: 8, top: 16, bottom: 28, containLabel: true },
+    xAxis: {
+      type: "time",
+      axisLine: { lineStyle: { color: CHART_COLOR.axisLine } },
+      axisTick: { show: false },
+      axisLabel: { color: CHART_COLOR.textMuted, fontSize: 11, hideOverlap: true },
+      splitLine: { show: false },
+    },
+    yAxis: {
+      type: "value",
+      name: "W",
+      // Anchored at 0 W, unlike the fitted voltage/frequency axes: a
+      // load of 300 W should read as 300 W of a scale that starts at
+      // nothing, not as a dramatic swing on a 280-320 W sliver.
+      min: 0,
+      nameTextStyle: { color: CHART_COLOR.textMuted, fontSize: 10 },
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { color: CHART_COLOR.textMuted, fontSize: 10, formatter: formatAxisTick },
+      splitLine: { lineStyle: { color: CHART_COLOR.splitLine } },
+    },
+    series: [
+      {
+        id: "ac-load",
+        name: seriesName,
+        type: "line",
+        showSymbol: false,
+        connectNulls: false,
+        // No smoothing: a load steps between levels, and a smoothed
+        // curve would overshoot a spike into watts that never happened.
+        smooth: false,
+        lineStyle: { width: 2, color: CHART_COLOR.cool },
+        areaStyle: { color: chartGradient("rgba(100,210,255,0.22)", "rgba(100,210,255,0)") },
+        data: [],
+      },
+    ],
+  });
+  const onResize = () => chart.resize();
+  window.addEventListener("resize", onResize);
+  let timer = null;
+  let stopped = false;
+  const stop = () => {
+    stopped = true;
+    clearInterval(timer);
+    window.removeEventListener("resize", onResize);
+    chart.dispose();
+  };
+  const refresh = () => {
+    if (!el.isConnected) {
+      stop();
+      return;
+    }
+    const to = Math.floor(Date.now() / 1000);
+    const url = new URL(src, window.location.href);
+    url.searchParams.set("from", String(to - windowS));
+    url.searchParams.set("to", String(to));
+    fetch(url)
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error("power series request failed");
+        }
+        return response.json();
+      })
+      .then((body) => {
+        if (stopped) {
+          return;
+        }
+        const points = body.points.map((point) => [point.ts * 1000, round2(point.ac_out_w_avg)]);
+        chart.setOption({ series: [{ id: "ac-load", data: points }] });
+        el.removeAttribute("data-chart-error");
+      })
+      .catch(() => {
+        el.setAttribute("data-chart-error", "true");
+      });
+  };
+  refresh();
+  timer = setInterval(refresh, POWER_REFRESH_MS);
+}
+
 function initCharts() {
   if (typeof window.echarts === "undefined") {
     return; // this page did not load echarts.min.js
@@ -866,6 +973,8 @@ function initCharts() {
       initEnergyBarChart(el);
     } else if (el.dataset.chart === "grid-series") {
       initGridSeriesChart(el);
+    } else if (el.dataset.chart === "power-series") {
+      initPowerSeriesChart(el);
     }
     el.dataset.chartInitialized = "true";
   });

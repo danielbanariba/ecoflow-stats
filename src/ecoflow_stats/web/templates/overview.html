@@ -21,4 +21,41 @@
 >
   {% include "partials/live.html" %}
 </section>
+
+<section class="power-chart-section mt-6" aria-label="{{ t('overview.power.heading') }}">
+  <h2 class="reveal">{{ t('overview.power.heading') }}</h2>
+  <div class="chart-card reveal mt-6">
+    {#
+      The chart refetches `data-src` itself every minute over a rolling
+      `data-window-s` window (app.js `initPowerSeriesChart`); the
+      `<details>` table below is the server-rendered fallback, hourly.
+    #}
+    {% call macros.chart_with_fallback('power-series-chart', 'power-series', t('overview.power.aria_label'), t('chart.fallback_label'), src=power.series_src, extra_data={'window-s': power.window_s, 'series-name': t('live.metrics.ac_out')}) %}
+      {% if power.has_readings %}
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">{{ t('overview.power.table.hour') }}</th>
+            <th scope="col">{{ t('overview.power.table.average') }}</th>
+            <th scope="col">{{ t('overview.power.table.peak') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in power.hourly_rows %}
+          <tr>
+            <td>{{ format_local_dt(row.ts, tz) }}</td>
+            <td class="num">{% if row.ac_out_w_avg is not none %}{{ row.ac_out_w_avg | round(0, 'common') | int }}{% else %}{{ t('common.unavailable') }}{% endif %}</td>
+            <td class="num">{% if row.ac_out_w_max is not none %}{{ row.ac_out_w_max | round(0, 'common') | int }}{% else %}{{ t('common.unavailable') }}{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p>{{ t('overview.power.table.empty') }}</p>
+      {% endif %}
+    {% endcall %}
+  </div>
+</section>
+
+<script src="/static/vendor/echarts.min.js" defer></script>
 {% endblock %}

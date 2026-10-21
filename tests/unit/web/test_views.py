@@ -33,6 +33,7 @@ from ecoflow_stats.web.views import (
     build_outages_summary,
     build_outages_view_model,
     build_overview_view_model,
+    build_power_chart_view_model,
     format_compact_local_dt,
     format_duration,
     format_hours_duration,
@@ -1058,3 +1059,24 @@ def test_build_grid_view_model_propagates_threshold_v_and_devices() -> None:
     assert view.typical_v is None
     assert view.days_with_data == 0
     assert view.days_analyzed == 0
+
+
+def test_build_power_chart_view_model_counts_a_zero_watt_hour_as_data_not_as_missing() -> None:
+    """Pass-1: a station feeding nothing all day reports a real 0 W, and
+    that must still show the hourly table; only a window with no
+    `ac_out_w` reading at all is "no readings". Pass-2: deriving
+    `has_readings` from truthiness (`any(row.ac_out_w_avg ...)`) instead
+    of `is not None` turns the first assertion red."""
+    idle = [(7_300, Reading(ac_out_w=0.0))]
+    silent = [(7_300, Reading(ac_out_w=None))]
+
+    with_zero = build_power_chart_view_model(
+        samples=idle, range_start=0, range_end=10_800, series_src="/s", window_s=10_800
+    )
+    without = build_power_chart_view_model(
+        samples=silent, range_start=0, range_end=10_800, series_src="/s", window_s=10_800
+    )
+
+    assert with_zero.has_readings is True
+    assert [row.ac_out_w_avg for row in with_zero.hourly_rows] == [None, None, 0.0]
+    assert without.has_readings is False

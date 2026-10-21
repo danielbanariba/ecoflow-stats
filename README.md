@@ -33,7 +33,8 @@ station.
 Live status at a glance: whether grid power is present right now, current
 solar/grid/AC-load power, battery charge with time-to-full or time
 remaining, state of health, cycle count, and the last 30 days' outage count
-and longest outage.
+and longest outage. A chart of the AC load over the last 24 hours
+refreshes itself every minute, to see how your equipment's power draw moved.
 
 ![Overview page](docs/images/overview.png)
 

@@ -14,7 +14,7 @@ period counted directly from the import). Named Defect "Phantom"
 from __future__ import annotations
 
 from ecoflow_stats.outages.model import Decision, Event, Gap
-from ecoflow_stats.outages.resolve import resolve, unresolved_legacy
+from ecoflow_stats.outages.resolve import resolve, unresolved_gaps, unresolved_legacy
 from ecoflow_stats.storage.legacy import LegacyOutage
 
 _RANGE_END = 100_000
@@ -244,3 +244,36 @@ def test_a_decision_matching_nothing_is_reported_as_orphaned() -> None:
     view = resolve(detected=[], gaps=[], legacy=[], decisions=[decision], range_end=_RANGE_END)
 
     assert view.orphaned_decisions == [decision]
+
+
+def test_a_gap_inside_a_detected_outage_is_not_offered_for_review() -> None:
+    """Pass-1: the silence already counts as downtime through the
+    detected outage, so offering it again invites a double count."""
+    outage = Event(start_ts=100, kind="outage", end_ts=4_000, readings=3)
+
+    assert unresolved_gaps([_gap(160, 3_760)], [], _RANGE_END, detected=[outage]) == []
+
+
+def test_a_gap_ending_an_ongoing_detected_outage_is_not_offered_for_review() -> None:
+    """An open outage covers everything up to the range end."""
+    outage = Event(start_ts=100, kind="outage", end_ts=None, readings=3)
+
+    assert unresolved_gaps([_gap(160, None)], [], _RANGE_END, detected=[outage]) == []
+
+
+def test_a_gap_reaching_past_a_detected_outage_is_still_offered() -> None:
+    """Only a gap the outage covers whole is hidden; one that starts
+    before the outage holds time the outage never counted."""
+    outage = Event(start_ts=1_000, kind="outage", end_ts=4_000, readings=3)
+    gap = _gap(400, 1_000)
+
+    assert unresolved_gaps([gap], [], _RANGE_END, detected=[outage]) == [gap]
+
+
+def test_a_gap_under_a_brief_event_is_still_offered() -> None:
+    """A brief event is never counted as downtime, so its silence can
+    only become downtime through a review."""
+    brief = Event(start_ts=100, kind="brief", end_ts=1_000, readings=1)
+    gap = _gap(100, 1_000)
+
+    assert unresolved_gaps([gap], [], _RANGE_END, detected=[brief]) == [gap]

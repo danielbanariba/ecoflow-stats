@@ -257,8 +257,9 @@ def gap_review_list(
         # uses for "no gaps in range" below.
         return HTMLResponse(f"<p>{t('error.400.message')}</p>", status_code=400)
     gaps = ctx.outage_store.gaps(device_id, range_start, range_end)
+    events = ctx.outage_store.events(device_id, range_start, range_end)
     decisions = ctx.decision_store.active(device_id) if ctx.decision_store is not None else []
-    pending = unresolved_gaps(gaps, decisions, range_end)
+    pending = unresolved_gaps(gaps, decisions, range_end, detected=events)
     decided = decided_gaps(gaps, decisions, range_end)
     cookie_value, token, is_new = _csrf_context(request)
     if not pending and not decided:
@@ -427,8 +428,9 @@ def decide_gap(
         range_end=range_end,
     )
     gaps = ctx.outage_store.gaps(device, range_start, range_end)
+    events = ctx.outage_store.events(device, range_start, range_end)
     decisions = ctx.decision_store.active(device)
-    pending_count = len(unresolved_gaps(gaps, decisions, range_end))
+    pending_count = len(unresolved_gaps(gaps, decisions, range_end, detected=events))
     html += _review_count_oob_fragment(
         element_id="gap-review-count",
         key="outages.gap_review.count",
@@ -567,8 +569,9 @@ def undo(
             range_end=range_end,
         )
         gaps = ctx.outage_store.gaps(device, range_start, range_end)
+        events = ctx.outage_store.events(device, range_start, range_end)
         decisions = ctx.decision_store.active(device)
-        pending_count = len(unresolved_gaps(gaps, decisions, range_end))
+        pending_count = len(unresolved_gaps(gaps, decisions, range_end, detected=events))
         html += _review_count_oob_fragment(
             element_id="gap-review-count",
             key="outages.gap_review.count",

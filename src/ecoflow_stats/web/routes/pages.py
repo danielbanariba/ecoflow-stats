@@ -347,7 +347,7 @@ def outages_page(
     aggregates = compute_aggregates(
         outages=view.outages, range_start=range_start, range_end=range_end, tz=api_ctx.tz
     )
-    pending_gaps = unresolved_gaps(gaps, decisions, range_end)
+    pending_gaps = unresolved_gaps(gaps, decisions, range_end, detected=events)
     pending_legacy = unresolved_legacy(legacy, decisions)
 
     view_model = build_outages_view_model(

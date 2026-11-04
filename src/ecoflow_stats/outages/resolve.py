@@ -256,20 +256,41 @@ def resolve(
     )
 
 
+def _covered_by_detected_outage(gap: Gap, detected: Sequence[Event], range_end: int) -> bool:
+    """Whether a detected (debounced) outage spans this whole gap -- its
+    silence then already counts as downtime through that outage."""
+    gap_end = _closed_end(gap.end_ts, range_end)
+    return any(
+        event.kind == "outage"
+        and event.start_ts <= gap.start_ts
+        and gap_end <= _closed_end(event.end_ts, range_end)
+        for event in detected
+    )
+
+
 def unresolved_gaps(
-    gaps: Sequence[Gap], decisions: Sequence[Decision], range_end: int
+    gaps: Sequence[Gap],
+    decisions: Sequence[Decision],
+    range_end: int,
+    *,
+    detected: Sequence[Event],
 ) -> list[Gap]:
     """Every gap with no active decision overlapping it by at least
     `_MIN_OVERLAP_RATIO` -- the review queue a user still needs to act on
     (web-ui "Gap and Phantom Review Flow"), the inverse of the matching
     `resolve()` already does internally once a gap *is* decided. Reuses
     `_best_decision` rather than duplicating its overlap-matching rule in
-    a caller."""
+    a caller.
+
+    A gap a detected outage covers whole is never offered: its silence
+    already counts as downtime through that outage, and confirming it
+    as well would count the same time twice."""
     return [
         gap
         for gap in gaps
         if _best_decision(decisions, "gap", gap.start_ts, _closed_end(gap.end_ts, range_end))
         is None
+        and not _covered_by_detected_outage(gap, detected, range_end)
     ]
 
 

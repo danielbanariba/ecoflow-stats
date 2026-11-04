@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 from ecoflow_stats import bootstrap
 from ecoflow_stats.config import load_settings
 from ecoflow_stats.jobs import SupervisedTask, SupervisedTaskHandle
-from ecoflow_stats.outages.model import Decision, Gap
+from ecoflow_stats.outages.model import Decision, Event, Gap
 from ecoflow_stats.storage.decisions import DecisionStore
 from ecoflow_stats.storage.imports import ImportRunStore
 from ecoflow_stats.storage.legacy import LegacyStore
@@ -86,12 +86,16 @@ def _gap(start_ts: int, end_ts: int | None, **overrides: object) -> Gap:
 
 
 def _client(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, gaps: list[Gap] | None = None
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    gaps: list[Gap] | None = None,
+    events: list[Event] | None = None,
 ) -> tuple[bootstrap.Application, int, TestClient]:
     application = _build(monkeypatch, tmp_path)
     (device,) = application.device_records
     outage_store = OutageStore(application.database.writer)
-    outage_store.replace_from(device.id, None, [], gaps or [])
+    outage_store.replace_from(device.id, None, events or [], gaps or [])
     application.database.writer.commit()
     app = create_app(
         application,
@@ -188,6 +192,32 @@ def test_opening_the_gap_review_list_shows_unresolved_and_decided_gaps_with_thei
         assert f'data-gap-start="{decided_start}"' in html
         assert "Confirmed as an outage" in html
         assert f"/decisions/{decision_id}/undo" in html
+    finally:
+        application.database.close()
+
+
+def test_the_review_list_and_page_count_skip_a_gap_a_detected_outage_covers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Pass-1: a silence inside a detected outage was offered for review
+    on the outages page and in its review list, where confirming it
+    would double-count that downtime."""
+    outage_start = _RANGE_START + 1_000
+    covered_start = outage_start + 60
+    application, _device_id, client = _client(
+        monkeypatch,
+        tmp_path,
+        events=[Event(start_ts=outage_start, end_ts=outage_start + 3_720, kind="outage")],
+        gaps=[_gap(covered_start, outage_start + 3_660, state_before="absent")],
+    )
+    try:
+        with client:
+            listing = client.get("/outages/gaps").text
+            page = client.get("/outages").text
+
+        assert f'data-gap-start="{covered_start}"' not in listing
+        assert "No gaps need review in this range." in listing
+        assert "0 gaps awaiting review" in page
     finally:
         application.database.close()
 

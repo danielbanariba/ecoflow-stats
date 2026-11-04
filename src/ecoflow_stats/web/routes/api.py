@@ -442,8 +442,9 @@ def gaps_route(
     device_id = _resolve_device_id(ctx, device)
     range_start, range_end = _resolve_range(ctx, start, end)
     gaps = ctx.outage_store.gaps(device_id, range_start, range_end)
+    events = ctx.outage_store.events(device_id, range_start, range_end)
     decisions = ctx.decision_store.active(device_id) if ctx.decision_store is not None else []
-    pending = unresolved_gaps(gaps, decisions, range_end)
+    pending = unresolved_gaps(gaps, decisions, range_end, detected=events)
     body = {
         "schema": _GAPS_SCHEMA,
         "device_id": device_id,

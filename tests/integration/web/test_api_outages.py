@@ -228,6 +228,36 @@ def test_heatmap_route_returns_the_joint_weekday_by_hour_matrix(tmp_path: Path) 
         db.close()
 
 
+def test_gaps_route_does_not_offer_a_gap_a_detected_outage_already_covers(
+    tmp_path: Path,
+) -> None:
+    """A silence inside a detected outage already counts as downtime.
+    Pass-1: the queue still offered it, and confirming it counted the
+    same seconds twice. A gap only touching an outage's start, or under
+    a brief event (not counted as downtime), stays reviewable."""
+    outage_start = _RANGE_START + 1_000
+    covered = _gap(outage_start + 60, outage_start + 3_660, state_before="absent")
+    before_outage = _gap(outage_start - 600, outage_start, state_after="absent")
+    brief_start = _RANGE_START + 20_000
+    under_brief = _gap(brief_start, brief_start + 900, state_before="absent")
+    client, db, device_id = _client(
+        tmp_path,
+        events=[
+            _event(outage_start, outage_start + 3_720, readings=3),
+            _event(brief_start, brief_start + 900, kind="brief"),
+        ],
+        gaps=[before_outage, covered, under_brief],
+    )
+    try:
+        response = client.get("/api/v1/gaps", params=_range_query(device_id))
+
+        assert response.status_code == 200
+        starts = [gap["start_ts"] for gap in response.json()["gaps"]]
+        assert starts == [before_outage.start_ts, under_brief.start_ts]
+    finally:
+        db.close()
+
+
 def test_gaps_route_returns_only_unresolved_gaps_with_their_evidence(
     tmp_path: Path,
 ) -> None:

@@ -630,6 +630,34 @@ def test_an_incremental_recompute_keeps_a_sample_less_days_energy_like_a_full_on
     assert incremental == _energy_by_day(env, device_id)
 
 
+def test_an_incremental_recompute_finds_each_counters_own_last_reading(env: _Env) -> None:
+    """Each counter is accounted from its own last reading; a sample can
+    lack one. Pass-1: the incremental run seeded every counter from the
+    single sample before its window, which here carries no `chg_ac_wh`,
+    so the 100 Wh charged across the three days was never credited
+    (no day got any of it, where a full recompute prorates all 100)."""
+    device_id = env.device("BA31ZEB1SF7F0001")
+    env.insert(
+        device_id,
+        [
+            (43_200, _reading(chg_ac_wh=0.0)),  # day one
+            (80_000, _reading(soc=50)),  # day one, no counter
+            (129_600, _reading(soc=50)),  # day two, no counter
+        ],
+    )
+    assert env.derive(device_id) is True
+
+    env.insert(device_id, [(180_000, _reading(chg_ac_wh=100.0))])  # day three
+    DerivationStore(env.writer).mark_dirty(device_id, "rollups", 180_000)
+    assert env.derive(device_id) is True
+    incremental = _energy_by_day(env, device_id)
+
+    assert env.derive(device_id, full=True) is True
+    full = _energy_by_day(env, device_id)
+    assert sum(chg for chg, _flags in full.values()) == pytest.approx(100.0)
+    assert incremental == full
+
+
 def test_a_clean_derivation_does_nothing_unless_forced(env: _Env) -> None:
     device_id = env.device("BA31ZEB1SF7F0001")
     env.insert(device_id, [(0, _reading(soc=90))])

@@ -51,6 +51,8 @@ from datetime import datetime
 from functools import partial
 from typing import TYPE_CHECKING
 
+from ecoflow_stats.devices.reading import Reading
+from ecoflow_stats.energy.accounting import COUNTER_FIELDS
 from ecoflow_stats.energy.service import daily_energy_for_samples
 from ecoflow_stats.grid.quality import grid_quality_range
 from ecoflow_stats.outages.model import DetectorConfig
@@ -59,7 +61,6 @@ from ecoflow_stats.timeutil import day_bounds, local_day
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from ecoflow_stats.devices.reading import Reading
     from ecoflow_stats.ports import DerivationStore, SampleStore
     from ecoflow_stats.storage.rollups import RollupStore
 
@@ -190,14 +191,15 @@ def derive_rollups(
     uses, or grid presence here can silently disagree with the outages
     page.
 
-    Energy on an INCREMENTAL run: a counter segment starts at the
-    sample *before* the one that closes it, so a new sample on the dirty
-    day also changes the energy of the day holding the last sample
-    before it (a segment across midnight is prorated over both days).
-    The energy columns are therefore recomputed from that earlier
-    sample's day, with the sample before that day as each counter's
-    baseline, exactly as a ``full=True`` recompute would credit them;
-    that earlier day's battery and grid columns are left untouched.
+    Energy on an INCREMENTAL run: a counter segment starts at that
+    counter's own previous reading, so a new reading on the dirty day
+    also changes the energy of every day back to the one holding that
+    counter's last value before it (a segment is prorated over all the
+    days it spans). The energy columns are therefore recomputed from
+    the earliest such day across the counters, each counter seeded with
+    its own last value before that day, exactly as a ``full=True``
+    recompute would credit them; those earlier days' battery and grid
+    columns are left untouched.
 
     Starting point: no stored derivation, or a version/parameter change
     -> full recompute from the beginning of all stored samples; a dirty
@@ -232,14 +234,21 @@ def derive_rollups(
         if existing.dirty_from_ts is None:  # type: ignore[union-attr]
             return False
         lower = _day_start(effective_day_fn(existing.dirty_from_ts), tz)  # type: ignore[union-attr]
+        # Each counter is accounted from its own last reading, and a
+        # sample may lack one: a counter's first segment in the window
+        # starts at its own last value before the dirty day.
         energy_lower = lower
-        energy_baseline: list[tuple[int, Reading]] = []
-        previous = sample_store.latest_in_range(device_id, -(2**63), lower - 1)
-        if previous is not None:
-            energy_lower = _day_start(effective_day_fn(previous.ts), tz)
-            before = sample_store.latest_in_range(device_id, -(2**63), energy_lower - 1)
-            if before is not None:
-                energy_baseline = [(before.ts, before.reading)]
+        for field in COUNTER_FIELDS:
+            for row in sample_store.latest_with(device_id, field, lower):
+                energy_lower = min(energy_lower, _day_start(effective_day_fn(row.ts), tz))
+        energy_baseline: list[tuple[int, Reading]] = sorted(
+            (
+                (row.ts, Reading(**{field: getattr(row.reading, field)}))
+                for field in COUNTER_FIELDS
+                for row in sample_store.latest_with(device_id, field, energy_lower)
+            ),
+            key=lambda pair: pair[0],
+        )
     else:
         lower = energy_lower = -(2**63)
         energy_baseline = []

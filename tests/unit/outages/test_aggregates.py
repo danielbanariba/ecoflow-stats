@@ -122,3 +122,27 @@ def test_an_unconfirmed_suspected_phantom_is_excluded_by_never_reaching_aggregat
     result = compute_aggregates(outages=view.outages, range_start=0, range_end=10_000, tz=_UTC)
 
     assert result.count == 0
+
+
+def test_total_downtime_counts_time_covered_by_two_overlapping_outages_once() -> None:
+    """A gap confirmed as an outage before covered gaps stopped being
+    offered still overlaps the detected outage around it. Pass-1: the
+    two durations were summed, so a 3660 s outage totalled 7260 s."""
+    outages = [
+        _outage(60, 3_720, source="detected"),
+        _outage(60, 3_660, source="gap", start_uncertain=True, end_uncertain=True),
+    ]
+
+    result = compute_aggregates(outages=outages, range_start=0, range_end=10_000, tz=_UTC)
+
+    assert result.total_downtime_s == 3_660
+
+
+def test_total_downtime_counts_partly_overlapping_outages_as_their_union() -> None:
+    """Pass-1: overlapping intervals must add only the time not already
+    counted -- [0, 600) and [400, 1000) are 1000 s, not 1200 s."""
+    outages = [_outage(0, 600), _outage(400, 1_000, source="legacy")]
+
+    result = compute_aggregates(outages=outages, range_start=0, range_end=10_000, tz=_UTC)
+
+    assert result.total_downtime_s == 1_000

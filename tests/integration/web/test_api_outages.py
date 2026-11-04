@@ -228,6 +228,31 @@ def test_heatmap_route_returns_the_joint_weekday_by_hour_matrix(tmp_path: Path) 
         db.close()
 
 
+def test_outages_route_counts_a_confirmed_gap_inside_a_detected_outage_once(
+    tmp_path: Path,
+) -> None:
+    """A decision confirming a covered gap, recorded before such gaps
+    stopped being offered, is kept with its undo. Pass-1: its time was
+    added on top of the detected outage, so a 3660 s outage reported
+    7260 s of downtime."""
+    outage_start = _RANGE_START + 1_000
+    gap_start, gap_end = outage_start, outage_start + 3_600
+    client, db, device_id = _client(
+        tmp_path,
+        events=[_event(outage_start, outage_start + 3_660, readings=3)],
+        gaps=[_gap(gap_start, gap_end, state_before="absent", state_after="absent")],
+    )
+    try:
+        DecisionStore(db.writer).add(_decision(device_id, "gap", gap_start, gap_end, "outage"))
+
+        response = client.get("/api/v1/outages", params=_range_query(device_id))
+
+        assert response.status_code == 200
+        assert response.json()["total_downtime_s"] == 3_660
+    finally:
+        db.close()
+
+
 def test_gaps_route_does_not_offer_a_gap_a_detected_outage_already_covers(
     tmp_path: Path,
 ) -> None:

@@ -41,6 +41,19 @@ class OutageAggregates:
     sometimes, with no way to tell whether it was the same outages."""
 
 
+def merge_intervals(intervals: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Merge half-open ``[start, end)`` intervals into the sorted,
+    non-overlapping set covering the same time, so overlapping time is
+    only ever counted once."""
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
 def compute_aggregates(
     *,
     outages: Sequence[EffectiveOutage],
@@ -56,10 +69,15 @@ def compute_aggregates(
     each outage's own (unclipped) start time, converted to the local
     calendar in `tz` -- clipping only affects the downtime totals, never
     which cell a start time falls into.
+
+    Total downtime is the length of the union of the clipped outages:
+    time two entries both cover (a gap confirmed as an outage inside a
+    detected one, say) counts once. `count` and `longest_s` stay per
+    entry.
     """
     zone = ZoneInfo(tz)
     count = 0
-    total = 0
+    clipped: list[tuple[int, int]] = []
     longest: int | None = None
     heatmap = [[0] * 24 for _ in range(7)]
 
@@ -71,7 +89,7 @@ def compute_aggregates(
 
         duration = clipped_end - clipped_start
         count += 1
-        total += duration
+        clipped.append((clipped_start, clipped_end))
         longest = duration if longest is None else max(longest, duration)
 
         local_start = datetime.fromtimestamp(outage.start_ts, tz=UTC).astimezone(zone)
@@ -79,10 +97,10 @@ def compute_aggregates(
 
     return OutageAggregates(
         count=count,
-        total_downtime_s=total,
+        total_downtime_s=sum(end - start for start, end in merge_intervals(clipped)),
         longest_s=longest,
         heatmap=heatmap,
     )
 
 
-__all__ = ["OutageAggregates", "compute_aggregates"]
+__all__ = ["OutageAggregates", "compute_aggregates", "merge_intervals"]

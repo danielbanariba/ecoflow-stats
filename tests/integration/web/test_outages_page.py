@@ -199,6 +199,34 @@ def test_unknown_time_leaves_out_a_gap_a_detected_outage_covers(
         application.database.close()
 
 
+def test_a_confirmed_gap_inside_a_detected_outage_counts_as_one_outage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A decision confirming a covered gap is kept, but the gap and the
+    detected outage around it are one real outage. Pass-1: the summary
+    showed 2 outages and a mean of 30 min 30 s for one 61-minute cut."""
+    outage_start = _RANGE_START + 1_000
+    gap_start, gap_end = outage_start, outage_start + 3_600
+    application, _device_id, client = _client(
+        monkeypatch,
+        tmp_path,
+        events=[_event(outage_start, outage_start + 3_660, readings=3)],
+        gaps=[_gap(gap_start, gap_end, state_before="absent", state_after="absent")],
+        decisions_factory=lambda device_id: [
+            _decision(device_id, "gap", gap_start, gap_end, "outage")
+        ],
+    )
+    try:
+        with client:
+            html = client.get("/outages").text
+
+        assert _dd_value(html, "Outage count") == "1"
+        assert _dd_value(html, "Total downtime") == "1 h 1 min"
+        assert _dd_value(html, "Mean duration") == "1 h 1 min"
+    finally:
+        application.database.close()
+
+
 def test_the_summary_reports_unavailable_mean_and_longest_with_no_outages(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

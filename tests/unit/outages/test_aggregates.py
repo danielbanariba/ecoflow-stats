@@ -146,3 +146,18 @@ def test_total_downtime_counts_partly_overlapping_outages_as_their_union() -> No
     result = compute_aggregates(outages=outages, range_start=0, range_end=10_000, tz=_UTC)
 
     assert result.total_downtime_s == 1_000
+
+
+def test_overlapping_outages_count_as_one_outage() -> None:
+    """A gap confirmed as an outage inside a detected one is one real
+    outage. Pass-1: each entry was counted, so the pair reported two
+    outages and halved the mean duration."""
+    outages = [
+        _outage(60, 3_720, source="detected"),
+        _outage(60, 3_660, source="gap", start_uncertain=True, end_uncertain=True),
+    ]
+
+    result = compute_aggregates(outages=outages, range_start=0, range_end=10_000, tz=_UTC)
+
+    assert result.count == 1
+    assert result.total_downtime_s == 3_660

@@ -57,7 +57,9 @@ def _never_ticks(application: bootstrap.Application) -> SupervisedTaskHandle:
     return SupervisedTaskHandle(supervised=supervised, task=task)
 
 
-def _build(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> bootstrap.Application:
+def _build(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, tz: str = "UTC"
+) -> bootstrap.Application:
     from datetime import UTC, datetime
 
     env = {
@@ -65,6 +67,7 @@ def _build(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> bootstrap.Applica
         "ECOFLOW_SECRET_KEY": "test-secret-key",
         "ECOFLOW_DEVICES": "TESTDEV0001",
         "ECOFLOW_STATS_DATA_DIR": str(tmp_path / "data"),
+        "ECOFLOW_STATS_TZ": tz,
     }
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -86,8 +89,9 @@ def _client(
     events: list[Event] | None = None,
     samples: list[tuple[int, Reading]] | None = None,
     rollups: list[dict[str, object]] | None = None,
+    tz: str = "UTC",
 ) -> tuple[bootstrap.Application, int, TestClient]:
-    application = _build(monkeypatch, tmp_path)
+    application = _build(monkeypatch, tmp_path, tz=tz)
     (device,) = application.device_records
     outage_store = OutageStore(application.database.writer)
     outage_store.replace_from(device.id, None, events or [], [])
@@ -588,6 +592,62 @@ def test_battery_trends_route_returns_rollup_rows_in_day_order(
         assert [day["day"] for day in body["days"]] == ["2026-01-04", "2026-01-05"]
         assert body["days"][0]["cycles_last"] == 10
         assert body["days"][1]["soh_last"] == 97.0
+    finally:
+        application.database.close()
+
+
+def test_battery_trends_route_selects_rollup_days_by_the_configured_local_day(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Rollup rows are keyed by local calendar day under
+    `ECOFLOW_STATS_TZ`, so the route must pick its first/last day the
+    same way. Pass-1: in Tegucigalpa (UTC-6) the range's first instant
+    is 18:00 on 2026-01-01 local but already 2026-01-02 in UTC, so a
+    UTC-day lookup drops the first local day's trend point."""
+    application, device_id, client = _client(
+        monkeypatch,
+        tmp_path,
+        tz="America/Tegucigalpa",
+        rollups=[
+            _rollup_row("2026-01-01", cycles_last=10, soh_last=98.0),
+            _rollup_row("2026-01-02", cycles_last=11, soh_last=97.0),
+        ],
+    )
+    try:
+        with client:
+            response = client.get(
+                "/api/v1/battery/trends",
+                params={"device": device_id, "from": _RANGE_START, "to": _NOW_TS},
+            )
+
+        assert response.status_code == 200
+        assert [day["day"] for day in response.json()["days"]] == ["2026-01-01", "2026-01-02"]
+    finally:
+        application.database.close()
+
+
+def test_the_battery_page_trend_table_selects_rollup_days_by_the_local_day(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The page's own rollup lookup must use local days too. Pass-1: a
+    UTC-day lookup in Tegucigalpa (UTC-6) starts one day late and drops
+    the range's first local day from the trend table."""
+    application, _device_id, client = _client(
+        monkeypatch,
+        tmp_path,
+        tz="America/Tegucigalpa",
+        rollups=[
+            _rollup_row("2026-01-01", cycles_last=10, soh_last=98.0),
+            _rollup_row("2026-01-02", cycles_last=11, soh_last=97.0),
+        ],
+    )
+    try:
+        with client:
+            response = client.get("/battery")
+
+        assert response.status_code == 200
+        assert "<td>2026-01-01</td>" in response.text
+        assert "<td>2026-01-02</td>" in response.text
     finally:
         application.database.close()
 

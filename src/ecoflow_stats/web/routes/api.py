@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -191,15 +191,6 @@ def select_bucket[BucketT](
         if max_days is None or span_days <= max_days:
             return value
     return tiers[-1][1]
-
-
-def _utc_day_str(ts: int) -> str:
-    """UTC calendar day for ``ts`` -- the same placeholder day-
-    bucketing `rollups.service._utc_day` uses (Phase 18 will replace
-    both with a timezone-aware `local_day`; duplicated here as a
-    one-line conversion rather than importing that module's private
-    helper)."""
-    return datetime.fromtimestamp(ts, tz=UTC).date().isoformat()
 
 
 def _rollup_store(request: Request) -> RollupStore:
@@ -523,7 +514,7 @@ def battery_trends_route(
     device_id = _resolve_device_id(ctx, device)
     range_start, range_end = _resolve_range(ctx, start, end)
     rollup_rows = _rollup_store(request).between(
-        device_id, _utc_day_str(range_start), _utc_day_str(range_end)
+        device_id, local_day(range_start, ctx.tz), local_day(range_end, ctx.tz)
     )
     trend_days = [
         DailyBatteryTrend(

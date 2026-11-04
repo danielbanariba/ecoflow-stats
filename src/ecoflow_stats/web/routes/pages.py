@@ -7,7 +7,7 @@ plain-callables-and-live-objects style, attached to `app.state.pages`.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import quote
@@ -378,15 +378,6 @@ def outages_page(
     return response
 
 
-def _utc_day_str(ts: int) -> str:
-    """UTC calendar day for ``ts`` -- the same placeholder day-
-    bucketing `rollups.service._utc_day` uses, duplicated here (and in
-    `web.routes.api`) as a one-line conversion rather than importing
-    either module's private helper (Phase 18 replaces both with a
-    timezone-aware `local_day`)."""
-    return datetime.fromtimestamp(ts, tz=UTC).date().isoformat()
-
-
 def _rollup_store(request: Request) -> RollupStore:
     """`RollupStore` built from the real `Application`'s own writer
     connection, read cross-context from `request.app.state.application`
@@ -451,7 +442,9 @@ def battery_page(
         if event.kind == "outage"
     ]
     rollup_rows = _rollup_store(request).between(
-        selected_id, _utc_day_str(range_start), _utc_day_str(range_end)
+        selected_id,
+        local_day(range_start, request.app.state.api.tz),
+        local_day(range_end, request.app.state.api.tz),
     )
     trend_days = [
         DailyBatteryTrend(

@@ -190,19 +190,14 @@ def derive_rollups(
     uses, or grid presence here can silently disagree with the outages
     page.
 
-    Known gap (same category as apply-progress-batch13's documented
-    gaps, not fixed here): on an INCREMENTAL run, the energy window
-    queried is ``[lower, now_ts]`` -- the same window the battery
-    fields use -- so the very first in-window reading of each counter
-    field establishes a fresh baseline with no credited delta, exactly
-    like a device's genuine first-ever sample. Any energy that moved
-    between the last sample *before* ``lower`` and that first in-window
-    sample is therefore not credited to either day. Fixing this would
-    need a "last sample at or before a timestamp" query on
-    ``storage.samples.SampleStore``, which is outside this batch's
-    declared edit surface. A ``full=True`` recompute is unaffected (its
-    window starts at the beginning of all stored samples, where this
-    same baseline behavior is already correct).
+    Energy on an INCREMENTAL run: a counter segment starts at the
+    sample *before* the one that closes it, so a new sample on the dirty
+    day also changes the energy of the day holding the last sample
+    before it (a segment across midnight is prorated over both days).
+    The energy columns are therefore recomputed from that earlier
+    sample's day, with the sample before that day as each counter's
+    baseline, exactly as a ``full=True`` recompute would credit them;
+    that earlier day's battery and grid columns are left untouched.
 
     Starting point: no stored derivation, or a version/parameter change
     -> full recompute from the beginning of all stored samples; a dirty
@@ -237,13 +232,22 @@ def derive_rollups(
         if existing.dirty_from_ts is None:  # type: ignore[union-attr]
             return False
         lower = _day_start(effective_day_fn(existing.dirty_from_ts), tz)  # type: ignore[union-attr]
+        energy_lower = lower
+        energy_baseline: list[tuple[int, Reading]] = []
+        previous = sample_store.latest_in_range(device_id, -(2**63), lower - 1)
+        if previous is not None:
+            energy_lower = _day_start(effective_day_fn(previous.ts), tz)
+            before = sample_store.latest_in_range(device_id, -(2**63), energy_lower - 1)
+            if before is not None:
+                energy_baseline = [(before.ts, before.reading)]
     else:
-        lower = -(2**63)
+        lower = energy_lower = -(2**63)
+        energy_baseline = []
 
     now_ts = int(now.timestamp())
     samples_by_day: dict[str, list[tuple[int, Reading]]] = {}
     all_samples: list[tuple[int, Reading]] = []
-    for row in sample_store.between(device_id, lower, now_ts):
+    for row in sample_store.between(device_id, energy_lower, now_ts):
         samples_by_day.setdefault(effective_day_fn(row.ts), []).append((row.ts, row.reading))
         all_samples.append((row.ts, row.reading))
 
@@ -257,20 +261,14 @@ def derive_rollups(
     # are irrelevant here: only the Wh/flags fields are persisted, never
     # `DailyEnergy.cost`/`currency`.
     energy_by_day = daily_energy_for_samples(
-        all_samples, tz=tz, tariff=None, currency="", gap_threshold_s=config.gap_threshold_s
+        energy_baseline + all_samples,
+        tz=tz,
+        tariff=None,
+        currency="",
+        gap_threshold_s=config.gap_threshold_s,
     )
 
     for day, day_samples in samples_by_day.items():
-        soc_min, soc_max, cycles_last, soh_last, batt_temp_max = _daily_battery_fields(day_samples)
-        rollup_store.upsert(
-            device_id,
-            day,
-            soc_min=soc_min,
-            soc_max=soc_max,
-            cycles_last=cycles_last,
-            soh_last=soh_last,
-            batt_temp_max=batt_temp_max,
-        )
         energy = energy_by_day.get(day)
         if energy is not None:
             rollup_store.upsert_energy(
@@ -284,6 +282,18 @@ def derive_rollups(
                 chg_ac_est_wh=energy.chg_ac_est_wh,
                 energy_flags=_encode_energy_flags(energy.flags),
             )
+        if day_samples[0][0] < lower:
+            continue  # queried only for its energy columns, see above
+        soc_min, soc_max, cycles_last, soh_last, batt_temp_max = _daily_battery_fields(day_samples)
+        rollup_store.upsert(
+            device_id,
+            day,
+            soc_min=soc_min,
+            soc_max=soc_max,
+            cycles_last=cycles_last,
+            soh_last=soh_last,
+            batt_temp_max=batt_temp_max,
+        )
         grid = grid_quality_range(day_samples, config=config)
         if grid == "unavailable":
             rollup_store.upsert_grid(

@@ -89,6 +89,10 @@ class SampleStore(Protocol):
         or ``None`` if it has none."""
         ...
 
+    def latest_in_range(self, device_id: int, start: int, end: int) -> StoredSample | None:
+        """Return the most recent sample within ``[start, end]``, or ``None``."""
+        ...
+
 
 class FailureLog(Protocol):
     """Record of collection attempts that did not produce a sample."""

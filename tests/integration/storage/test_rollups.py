@@ -546,6 +546,43 @@ def test_an_incremental_recompute_only_touches_days_at_or_after_the_dirty_day(en
     assert second_day is not None and second_day.soc_min == 60
 
 
+def test_an_incremental_recompute_credits_energy_across_midnight_like_a_full_one(
+    env: _Env,
+) -> None:
+    """An incremental run must store the same energy as a full recompute
+    of the same history. Pass-1: the incremental window started at the
+    dirty day's midnight with no earlier baseline, so the 100 Wh that
+    moved between 23:59 and 00:01 was credited to neither day (both
+    stored 100 Wh, where a full recompute stores 150 Wh each)."""
+    device_id = env.device("BA31ZEB1SF7F0001")
+    env.insert(
+        device_id,
+        [(0, _reading(chg_ac_wh=0.0)), (86_340, _reading(chg_ac_wh=100.0))],  # day one
+    )
+    assert env.derive(device_id) is True
+
+    env.insert(
+        device_id,
+        [(86_460, _reading(chg_ac_wh=200.0)), (90_000, _reading(chg_ac_wh=300.0))],  # day two
+    )
+    DerivationStore(env.writer).mark_dirty(device_id, "rollups", 86_460)
+    assert env.derive(device_id) is True
+
+    def energy(day: str) -> float:
+        (chg_ac_wh,) = env.writer.execute(
+            "SELECT chg_ac_wh FROM daily_rollups WHERE device_id = ? AND day = ?",
+            (device_id, day),
+        ).fetchone()
+        return chg_ac_wh
+
+    incremental = (energy("1970-01-01"), energy("1970-01-02"))
+    assert env.derive(device_id, full=True) is True
+    full = (energy("1970-01-01"), energy("1970-01-02"))
+
+    assert full == (pytest.approx(150.0), pytest.approx(150.0))
+    assert incremental == full
+
+
 def test_a_clean_derivation_does_nothing_unless_forced(env: _Env) -> None:
     device_id = env.device("BA31ZEB1SF7F0001")
     env.insert(device_id, [(0, _reading(soc=90))])

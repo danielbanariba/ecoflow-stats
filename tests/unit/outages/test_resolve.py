@@ -14,7 +14,7 @@ period counted directly from the import). Named Defect "Phantom"
 from __future__ import annotations
 
 from ecoflow_stats.outages.model import Decision, Event, Gap
-from ecoflow_stats.outages.resolve import resolve
+from ecoflow_stats.outages.resolve import resolve, unresolved_legacy
 from ecoflow_stats.storage.legacy import LegacyOutage
 
 _RANGE_END = 100_000
@@ -173,6 +173,48 @@ def test_confirming_a_suspected_phantom_as_real_includes_it() -> None:
 
     assert len(view.outages) == 1
     assert view.legacy_statuses[0].status == "counted"
+
+
+def test_confirming_an_open_ended_suspected_phantom_as_real_includes_it() -> None:
+    """An orphan `corte` (no `retorno`) has no end, so the review
+    action anchors its decision to `[start_ts, start_ts]`. Pass-1: a
+    zero-length interval scored an overlap ratio of 0, so the verdict
+    never applied: the entry stayed excluded and the decision was
+    reported as orphaned."""
+    legacy_entry = _legacy(3, 2_000, None, flags=frozenset({"suspected_phantom", "orphan_start"}))
+    decision = _decision("legacy", 2_000, 2_000, "real")
+
+    view = resolve(
+        detected=[], gaps=[], legacy=[legacy_entry], decisions=[decision], range_end=_RANGE_END
+    )
+
+    assert view.legacy_statuses[0].status == "counted"
+    assert len(view.outages) == 1
+    assert view.orphaned_decisions == []
+
+
+def test_a_decided_open_ended_legacy_entry_leaves_the_review_queue() -> None:
+    """Pass-1: the same zero-length mismatch kept an already-decided
+    orphan `corte` in the review queue forever, however many times the
+    user decided it."""
+    legacy_entry = _legacy(3, 2_000, None, flags=frozenset({"suspected_phantom", "orphan_start"}))
+    decision = _decision("legacy", 2_000, 2_000, "phantom")
+
+    assert unresolved_legacy([legacy_entry], [decision]) == []
+
+
+def test_a_point_decision_does_not_match_a_legacy_entry_it_falls_outside() -> None:
+    """Pass-1: a zero-length decision must only match a target that
+    actually contains its instant, never one elsewhere on the timeline."""
+    legacy_entry = _legacy(3, 2_000, None, flags=frozenset({"suspected_phantom"}))
+    decision = _decision("legacy", 5_000, 5_000, "real")
+
+    view = resolve(
+        detected=[], gaps=[], legacy=[legacy_entry], decisions=[decision], range_end=_RANGE_END
+    )
+
+    assert view.legacy_statuses[0].status == "excluded_phantom"
+    assert view.orphaned_decisions == [decision]
 
 
 def test_detected_outage_events_are_always_counted_without_a_decision() -> None:

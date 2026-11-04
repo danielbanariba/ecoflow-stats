@@ -98,12 +98,17 @@ def _overlap_ratio(d_start: int, d_end: int, t_start: int, t_end: int) -> float:
     """Overlap length divided by the shorter of the two closed
     intervals. `Decision.end_ts` is always set (the schema's own `NOT
     NULL`), so only the target side (a gap, a legacy event) ever needs
-    an open-end substitution before calling this."""
+    an open-end substitution before calling this.
+
+    A zero-length interval (an open-ended legacy entry, anchored at
+    its own start) has no length to divide by: it matches fully when
+    its instant falls inside the other interval, and not at all
+    otherwise."""
     overlap = min(d_end, t_end) - max(d_start, t_start)
-    if overlap <= 0:
-        return 0.0
     shorter = min(d_end - d_start, t_end - t_start)
     if shorter <= 0:
+        return 1.0 if overlap >= 0 else 0.0
+    if overlap <= 0:
         return 0.0
     return overlap / shorter
 

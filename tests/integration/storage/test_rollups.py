@@ -621,6 +621,36 @@ def test_grid_presence_is_judged_against_the_configured_threshold_not_the_defaul
     assert row.grid_readings == 0
 
 
+def test_energy_gap_proration_uses_the_configured_gap_threshold_not_the_default(
+    env: _Env,
+) -> None:
+    """`ECOFLOW_STATS_GAP_THRESHOLD` defines what a data gap is, and its
+    value is already part of this job's params hash. Pass-1: the energy
+    accounting always used its own 150 s default, so a device polled
+    every 300 s under a 600 s threshold had every segment flagged
+    `gap_prorated` and all its grid charge counted as an estimate."""
+    device_id = env.device("BA31ZEB1SF7F0001")
+    env.insert(
+        device_id,
+        [
+            (0, _reading(chg_ac_wh=0.0)),
+            (300, _reading(chg_ac_wh=50.0)),
+            (600, _reading(chg_ac_wh=100.0)),
+        ],
+    )
+
+    assert env.derive(device_id, config=DetectorConfig(gap_threshold_s=600)) is True
+
+    (chg_ac_wh, chg_ac_est_wh, energy_flags) = env.writer.execute(
+        "SELECT chg_ac_wh, chg_ac_est_wh, energy_flags FROM daily_rollups"
+        " WHERE device_id = ? AND day = ?",
+        (device_id, "1970-01-01"),
+    ).fetchone()
+    assert chg_ac_wh == pytest.approx(100.0)
+    assert chg_ac_est_wh == pytest.approx(0.0)
+    assert energy_flags == 0
+
+
 def test_a_detector_config_change_forces_a_full_recompute_even_without_a_dirty_mark(
     env: _Env,
 ) -> None:

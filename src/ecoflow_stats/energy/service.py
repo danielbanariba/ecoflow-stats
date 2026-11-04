@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ecoflow_stats.energy.accounting import DailyEnergy, daily_energy
+from ecoflow_stats.energy.accounting import DEFAULT_GAP_THRESHOLD_S, DailyEnergy, daily_energy
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -42,12 +42,15 @@ def daily_energy_for_samples(
     tz: str,
     tariff: float | None,
     currency: str,
+    gap_threshold_s: int = DEFAULT_GAP_THRESHOLD_S,
 ) -> dict[str, DailyEnergy]:
     """Daily energy by source and direction for an already-queried batch
     of a device's samples -- the thin seam between a port-supplied
     sample sequence and the pure accounting engine, so a caller never
     has to import `energy.accounting` directly."""
-    return daily_energy(samples, tz=tz, tariff=tariff, currency=currency)
+    return daily_energy(
+        samples, tz=tz, tariff=tariff, currency=currency, gap_threshold_s=gap_threshold_s
+    )
 
 
 __all__ = ["daily_energy_for_samples"]

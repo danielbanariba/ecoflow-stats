@@ -256,7 +256,9 @@ def derive_rollups(
     # boundaries whenever no test overrides `day_fn`. `tariff`/`currency`
     # are irrelevant here: only the Wh/flags fields are persisted, never
     # `DailyEnergy.cost`/`currency`.
-    energy_by_day = daily_energy_for_samples(all_samples, tz=tz, tariff=None, currency="")
+    energy_by_day = daily_energy_for_samples(
+        all_samples, tz=tz, tariff=None, currency="", gap_threshold_s=config.gap_threshold_s
+    )
 
     for day, day_samples in samples_by_day.items():
         soc_min, soc_max, cycles_last, soh_last, batt_temp_max = _daily_battery_fields(day_samples)

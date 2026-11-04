@@ -159,6 +159,7 @@ def build(
             clock=active_clock,
             lang=settings.notify_lang,
             device_labels=device_labels,
+            tz=settings.tz,
         )
         detector_config = DetectorConfig(
             threshold_v=settings.outage_threshold_v, gap_threshold_s=settings.gap_threshold

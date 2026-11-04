@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 from ecoflow_stats.notifications.messages import AlertKey, Message, end_message, start_message
 from ecoflow_stats.notifications.ntfy import NotifyError
@@ -43,6 +44,9 @@ class NotificationService:
     clock: Clock
     lang: Lang
     device_labels: Mapping[int, str] = field(default_factory=dict)
+    tz: str = "UTC"
+    """The configured IANA timezone (`ECOFLOW_STATS_TZ`) a message's
+    wall-clock times are rendered in; `clock.now()` itself is UTC."""
 
     async def handle_transition(self, device_id: int, transition: Started | Ended) -> None:
         """Render, claim, and attempt delivery for one live transition.
@@ -51,11 +55,12 @@ class NotificationService:
         kind: Kind = "start" if isinstance(transition, Started) else "end"
         event = transition.event
         now = self.clock.now()
+        local_now = now.astimezone(ZoneInfo(self.tz))
         label = self.device_labels.get(device_id) if len(self.device_labels) > 1 else None
         message = (
-            start_message(lang=self.lang, event=event, now=now, device_label=label)
+            start_message(lang=self.lang, event=event, now=local_now, device_label=label)
             if kind == "start"
-            else end_message(lang=self.lang, event=event, now=now, device_label=label)
+            else end_message(lang=self.lang, event=event, now=local_now, device_label=label)
         )
         key = AlertKey(device_id=device_id, event_start_ts=event.start_ts, kind=kind)
         now_ts = int(now.timestamp())

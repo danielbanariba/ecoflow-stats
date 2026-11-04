@@ -183,3 +183,62 @@ async def test_a_message_is_device_label_prefixed_when_more_than_one_device_is_c
         assert notifier.sent[0].title == "…0254: Power is out"
     finally:
         db.close()
+
+
+@pytest.mark.anyio
+async def test_the_alert_time_is_rendered_in_the_configured_local_timezone(
+    tmp_path: Path,
+) -> None:
+    """The clock reads UTC; the alert body's `HH:MM` must be the
+    operator's local wall-clock time. Pass-1: formatting the UTC instant
+    directly told a user in Tegucigalpa (UTC-6) the power went out at
+    14:30 when it went out at 08:30."""
+    db, ledger, device_id = _env(tmp_path)
+    try:
+        notifier = RecordingNotifier()
+        service = NotificationService(
+            ledger=ledger,
+            notifier=notifier,
+            clock=FakeClock(datetime(2026, 1, 1, 14, 30, tzinfo=UTC)),
+            lang="en",
+            tz="America/Tegucigalpa",
+        )
+
+        await service.handle_transition(device_id, Started(_event()))
+
+        assert notifier.sent[0].body.startswith("08:30 ")
+    finally:
+        db.close()
+
+
+@pytest.mark.anyio
+async def test_a_return_window_is_rendered_in_the_configured_local_timezone(
+    tmp_path: Path,
+) -> None:
+    """Pass-1: the "returned between" window of an outage that ended
+    inside a gap was also rendered in UTC, six hours off in
+    Tegucigalpa."""
+    db, ledger, device_id = _env(tmp_path)
+    try:
+        notifier = RecordingNotifier()
+        end_ts = int(datetime(2026, 1, 1, 14, 30, tzinfo=UTC).timestamp())
+        event = _event(
+            kind="outage",
+            end_ts=end_ts,
+            end_in_gap=True,
+            end_uncertainty_s=1_800,
+            soc_end=None,
+        )
+        service = NotificationService(
+            ledger=ledger,
+            notifier=notifier,
+            clock=FakeClock(datetime(2026, 1, 1, 14, 30, tzinfo=UTC)),
+            lang="en",
+            tz="America/Tegucigalpa",
+        )
+
+        await service.handle_transition(device_id, Ended(event))
+
+        assert notifier.sent[0].body == "08:30 · returned between 08:00 and 08:30"
+    finally:
+        db.close()

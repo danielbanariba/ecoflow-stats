@@ -16,7 +16,8 @@ import pytest
 
 from ecoflow_stats import bootstrap
 from ecoflow_stats.config import Settings, load_settings
-from tests.fakes import FakeClock
+from ecoflow_stats.outages.model import Event, Started
+from tests.fakes import FakeClock, RecordingNotifier
 
 VALID_ENV = {
     "ECOFLOW_ACCESS_KEY": "test-access-key",
@@ -156,6 +157,34 @@ def test_build_builds_a_notification_service_and_live_states_when_a_topic_is_con
         assert len(application.live_outage_states) == 2
         for record in application.device_records:
             assert record.id in application.live_outage_states
+    finally:
+        application.database.close()
+
+
+@pytest.mark.anyio
+async def test_build_renders_notification_times_in_the_configured_timezone(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Pass-1: the composition root built the notification service
+    without `ECOFLOW_STATS_TZ`, so every alert's `HH:MM` came out in UTC
+    rather than the operator's local time."""
+    monkeypatch.setenv("ECOFLOW_STATS_NTFY_TOPIC", "test-topic")
+    monkeypatch.setenv("ECOFLOW_STATS_TZ", "America/Tegucigalpa")
+    settings = _settings(monkeypatch, tmp_path / "data")
+    clock = FakeClock(datetime(2026, 1, 1, 14, 30, tzinfo=UTC))
+
+    application = bootstrap.build(settings, clock=clock)
+
+    try:
+        service = application.notification_service
+        assert service is not None
+        notifier = RecordingNotifier()
+        service.notifier = notifier
+        device_id = application.device_records[0].id
+
+        await service.handle_transition(device_id, Started(Event(start_ts=1_000)))
+
+        assert notifier.sent[0].body.startswith("08:30")
     finally:
         application.database.close()
 

@@ -268,20 +268,25 @@ def derive_rollups(
         gap_threshold_s=config.gap_threshold_s,
     )
 
+    # Every day a counter segment was prorated onto gets its energy row,
+    # including a day inside a multi-day gap that holds no sample of its
+    # own. Only the baseline's day, before the window, is left alone.
+    for day, energy in energy_by_day.items():
+        if _day_start(day, tz) < energy_lower:
+            continue
+        rollup_store.upsert_energy(
+            device_id,
+            day,
+            chg_ac_wh=energy.chg_ac_wh,
+            chg_dc_wh=energy.chg_dc_wh,
+            chg_solar_wh=energy.chg_solar_wh,
+            dsg_ac_wh=energy.dsg_ac_wh,
+            dsg_dc_wh=energy.dsg_dc_wh,
+            chg_ac_est_wh=energy.chg_ac_est_wh,
+            energy_flags=_encode_energy_flags(energy.flags),
+        )
+
     for day, day_samples in samples_by_day.items():
-        energy = energy_by_day.get(day)
-        if energy is not None:
-            rollup_store.upsert_energy(
-                device_id,
-                day,
-                chg_ac_wh=energy.chg_ac_wh,
-                chg_dc_wh=energy.chg_dc_wh,
-                chg_solar_wh=energy.chg_solar_wh,
-                dsg_ac_wh=energy.dsg_ac_wh,
-                dsg_dc_wh=energy.dsg_dc_wh,
-                chg_ac_est_wh=energy.chg_ac_est_wh,
-                energy_flags=_encode_energy_flags(energy.flags),
-            )
         if day_samples[0][0] < lower:
             continue  # queried only for its energy columns, see above
         soc_min, soc_max, cycles_last, soh_last, batt_temp_max = _daily_battery_fields(day_samples)

@@ -583,6 +583,53 @@ def test_an_incremental_recompute_credits_energy_across_midnight_like_a_full_one
     assert incremental == full
 
 
+def _energy_by_day(env: _Env, device_id: int) -> dict[str, tuple[float | None, int]]:
+    rows = env.writer.execute(
+        "SELECT day, chg_ac_wh, energy_flags FROM daily_rollups WHERE device_id = ? ORDER BY day",
+        (device_id,),
+    ).fetchall()
+    return {row["day"]: (row["chg_ac_wh"], row["energy_flags"]) for row in rows}
+
+
+def test_a_day_with_no_samples_inside_a_gap_keeps_its_prorated_energy_share(
+    env: _Env,
+) -> None:
+    """A counter delta across a multi-day gap is prorated over every
+    local day it spans. Pass-1: only days holding a sample got a rollup
+    row, so the middle day's share was dropped and a 48 h gap that
+    delivered 480 Wh stored only 240 Wh."""
+    device_id = env.device("BA31ZEB1SF7F0001")
+    env.insert(
+        device_id,
+        [(43_200, _reading(chg_ac_wh=0.0)), (216_000, _reading(chg_ac_wh=480.0))],  # 48 h apart
+    )
+
+    assert env.derive(device_id) is True
+
+    energy = _energy_by_day(env, device_id)
+    assert energy["1970-01-02"] == (pytest.approx(240.0), 4)  # gap_prorated
+    assert sum(chg for chg, _flags in energy.values()) == pytest.approx(480.0)
+
+
+def test_an_incremental_recompute_keeps_a_sample_less_days_energy_like_a_full_one(
+    env: _Env,
+) -> None:
+    """Pass-1: the same dropped middle day on an incremental run, where
+    the closing sample arrives after the opening one was rolled up."""
+    device_id = env.device("BA31ZEB1SF7F0001")
+    env.insert(device_id, [(43_200, _reading(chg_ac_wh=0.0))])
+    assert env.derive(device_id) is True
+
+    env.insert(device_id, [(216_000, _reading(chg_ac_wh=480.0))])
+    DerivationStore(env.writer).mark_dirty(device_id, "rollups", 216_000)
+    assert env.derive(device_id) is True
+    incremental = _energy_by_day(env, device_id)
+    assert incremental["1970-01-02"] == (pytest.approx(240.0), 4)
+
+    assert env.derive(device_id, full=True) is True
+    assert incremental == _energy_by_day(env, device_id)
+
+
 def test_a_clean_derivation_does_nothing_unless_forced(env: _Env) -> None:
     device_id = env.device("BA31ZEB1SF7F0001")
     env.insert(device_id, [(0, _reading(soc=90))])

@@ -14,6 +14,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from itertools import pairwise
 
+import pytest
+
 from ecoflow_stats.battery.stats import BatteryPowerStatus
 from ecoflow_stats.devices.reading import Reading
 from ecoflow_stats.live_status.status import DeviceStatus, OutageStatus
@@ -23,6 +25,7 @@ from ecoflow_stats.outages.resolve import EffectiveOutage
 from ecoflow_stats.storage.devices import DeviceRecord
 from ecoflow_stats.storage.rollups import DailyGridRollup
 from ecoflow_stats.web.views import (
+    EnergyViewModel,
     OutagesSummary,
     build_device_options,
     build_energy_period_row,
@@ -944,6 +947,85 @@ def test_build_energy_view_model_keeps_the_first_day_eligible_when_history_start
     )
     assert view.best_day is not None
     assert view.best_day.period == "2026-01-06"
+
+
+def _monthly_energy_view(
+    periods: list[dict[str, object]], *, range_start: int, range_end: int, tz: str = "UTC"
+) -> EnergyViewModel:
+    return build_energy_view_model(
+        device_records=(_device(1, "SN0001"),),
+        selected_device_id=1,
+        range_start=range_start,
+        range_end=range_end,
+        granularity="monthly",
+        periods=periods,
+        tariff=0.20,
+        currency="USD",
+        series_src="/api/v1/energy/daily?device=1",
+        now_ts=int(datetime(2026, 12, 1, tzinfo=UTC).timestamp()),
+        tz=tz,
+        history_start_ts=int(datetime(2025, 1, 1, tzinfo=UTC).timestamp()),
+    )
+
+
+def test_build_energy_view_model_leaves_months_only_partly_in_range_out_of_the_ranking() -> None:
+    """A monthly period sums only the days inside the range. Pass-1: a
+    range starting on 25 July and ending on 20 October ranked July's 7
+    days as the cheapest month and still ranked the cut-short October,
+    against whole months of the same daily usage."""
+    periods = [
+        _energy_period_dict("2026-07", chg_ac_wh=7_000.0, cost=1.40, currency="USD"),
+        _energy_period_dict("2026-08", chg_ac_wh=31_000.0, cost=6.20, currency="USD"),
+        _energy_period_dict("2026-09", chg_ac_wh=30_000.0, cost=6.00, currency="USD"),
+        _energy_period_dict("2026-10", chg_ac_wh=40_000.0, cost=8.00, currency="USD"),
+    ]
+
+    view = _monthly_energy_view(
+        periods,
+        range_start=int(datetime(2026, 7, 25, tzinfo=UTC).timestamp()),
+        range_end=int(datetime(2026, 10, 20, tzinfo=UTC).timestamp()),
+    )
+
+    assert view.best_day is not None and view.best_day.period == "2026-09"
+    assert view.worst_day is not None and view.worst_day.period == "2026-08"
+    assert view.total_cost == pytest.approx(1.40 + 6.20 + 6.00 + 8.00)
+
+
+def test_build_energy_view_model_shows_no_ranking_when_no_whole_month_is_in_range() -> None:
+    """Pass-1: with no whole month left, a partial month must not be
+    crowned cheapest or most expensive by default."""
+    periods = [
+        _energy_period_dict("2026-07", chg_ac_wh=7_000.0, cost=1.40, currency="USD"),
+        _energy_period_dict("2026-08", chg_ac_wh=20_000.0, cost=4.00, currency="USD"),
+    ]
+
+    view = _monthly_energy_view(
+        periods,
+        range_start=int(datetime(2026, 7, 25, tzinfo=UTC).timestamp()),
+        range_end=int(datetime(2026, 8, 20, tzinfo=UTC).timestamp()),
+    )
+
+    assert view.best_day is None
+    assert view.worst_day is None
+
+
+def test_build_energy_view_model_keeps_a_month_whose_first_and_last_days_are_in_range() -> None:
+    """Rollups are whole local days, so a range starting partway through
+    a month's first local day still sums that whole month. Pass-2: a
+    defect that compared the raw range start (10:00 on 1 August
+    Tegucigalpa time) with the month's start would drop a whole August."""
+    periods = [
+        _energy_period_dict("2026-08", chg_ac_wh=31_000.0, cost=6.20, currency="USD"),
+    ]
+
+    view = _monthly_energy_view(
+        periods,
+        range_start=int(datetime(2026, 8, 1, 16, tzinfo=UTC).timestamp()),  # 10:00 local
+        range_end=int(datetime(2026, 9, 1, 6, tzinfo=UTC).timestamp()),  # 00:00 local
+        tz="America/Tegucigalpa",
+    )
+
+    assert view.best_day is not None and view.best_day.period == "2026-08"
 
 
 def _grid_row(

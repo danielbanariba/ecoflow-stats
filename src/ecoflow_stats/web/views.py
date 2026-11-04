@@ -25,7 +25,13 @@ from ecoflow_stats.battery.stats import (
     summarize_battery_trend,
 )
 from ecoflow_stats.power.series import ac_load_series
-from ecoflow_stats.timeutil import duration_parts, local_day, period_end_ts, period_start_ts
+from ecoflow_stats.timeutil import (
+    day_bounds,
+    duration_parts,
+    local_day,
+    period_end_ts,
+    period_start_ts,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
@@ -787,18 +793,33 @@ def build_energy_view_model(
     its full length. A period is eligible only when it has both ended
     (`now_ts`) and started no earlier than the device's observed
     history (`history_start_ts`); `history_start_ts=None` (no recorded
-    sample at all) makes every period ineligible. A range with no
+    sample at all) makes every period ineligible. A month only partly
+    inside the selected range is ineligible too: it sums just the days
+    in range. A range with no
     complete period at all reports `None` for both, same as no tariff
     being configured -- never a ranking over an incomplete field."""
     rows = tuple(build_energy_period_row(period) for period in periods)
     total_in_wh = sum(row.chg_ac_wh + row.chg_dc_wh + row.chg_solar_wh for row in rows)
     total_out_wh = sum(row.dsg_ac_wh + row.dsg_dc_wh for row in rows)
+    # A month sums the whole local days from `local_day(range_start)`
+    # through `local_day(range_end)`, so it is only whole when both its
+    # first and last day fall inside that span. A daily period is always
+    # one whole day, so only a monthly one can be cut short this way.
+    range_first_day_start = day_bounds(local_day(range_start, tz), tz)[0]
+    range_last_day_end = day_bounds(local_day(range_end, tz), tz)[1]
     complete_rows = tuple(
         row
         for row in rows
         if period_end_ts(row.period, granularity, tz) <= now_ts
         and history_start_ts is not None
         and history_start_ts <= period_start_ts(row.period, granularity, tz)
+        and (
+            granularity != "monthly"
+            or (
+                range_first_day_start <= period_start_ts(row.period, granularity, tz)
+                and period_end_ts(row.period, granularity, tz) <= range_last_day_end
+            )
+        )
     )
     best_day: EnergyPeriodRow | None = None
     worst_day: EnergyPeriodRow | None = None

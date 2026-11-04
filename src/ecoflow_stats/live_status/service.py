@@ -30,20 +30,20 @@ def get_status(
     poll_interval_s: int,
     config: DetectorConfig = _DEFAULT_CONFIG,
 ) -> DeviceStatus:
-    """Build one device's live status from real storage."""
+    """Build one device's live status from real storage.
+
+    The stale-payload window is the last `stale_repeat - 1` readings
+    with a voltage before the latest one, however far back they are:
+    the outage detector's own window only ever holds judged readings,
+    and a reading with no voltage is never judged. `poll_interval_s`
+    no longer bounds that lookback."""
     latest = sample_store.latest(device_id)
     previous = []
-    if latest is not None:
-        window_start = latest.ts - poll_interval_s * config.stale_repeat
-        # A reading with no voltage is never judged, so the detector's
-        # own stale-payload window never holds one; skip it here too.
-        rows = [
-            row
-            for row in sample_store.between(device_id, window_start, latest.ts - 1)
-            if row.reading.grid_v is not None
-        ]
-        tail = rows[-(config.stale_repeat - 1) :] if config.stale_repeat > 1 else []
-        previous = [row.reading for row in tail]
+    if latest is not None and config.stale_repeat > 1:
+        rows = sample_store.latest_with(
+            device_id, "grid_v", latest.ts, limit=config.stale_repeat - 1
+        )
+        previous = [row.reading for row in reversed(rows)]
 
     now_ts = int(now.timestamp())
     ongoing_since: int | None = None

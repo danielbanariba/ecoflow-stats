@@ -118,6 +118,38 @@ def test_get_status_ignores_a_missing_voltage_reading_when_checking_for_a_stale_
         env.close()
 
 
+def test_get_status_finds_the_previous_judged_readings_past_several_missing_voltages(
+    tmp_path: Path,
+) -> None:
+    """The outage detector's stale-payload window is the last judged
+    readings, however far back. Pass-1: live status only looked three
+    poll intervals back, so two no-voltage rows pushed the earlier
+    repeats out of reach and the third identical judged row read as
+    "present" where the detector judges it a stale payload."""
+    env = _Env(tmp_path / "ecoflow-stats.db")
+    try:
+        repeated = Reading(grid_v=120.0, soc=80)
+        env.sample_store.add(env.device_id, _NOW_TS - 300, 1, repeated)
+        env.sample_store.add(env.device_id, _NOW_TS - 240, 1, repeated)
+        env.sample_store.add(env.device_id, _NOW_TS - 180, 1, Reading(soc=80))
+        env.sample_store.add(env.device_id, _NOW_TS - 120, 1, Reading(soc=80))
+        env.sample_store.add(env.device_id, _NOW_TS - 60, 1, repeated)
+
+        status = get_status(
+            env.device_id,
+            sample_store=env.sample_store,
+            outage_store=env.outage_store,
+            now=_NOW,
+            stale_threshold_s=180,
+            poll_interval_s=60,
+            config=_CONFIG,
+        )
+
+        assert status.grid == "unknown"
+    finally:
+        env.close()
+
+
 def test_get_status_reports_an_ongoing_outage_from_the_real_outage_store(tmp_path: Path) -> None:
     """Pass-1: not consulting the real `outage_events` table would mean
     the live status page never shows "power has been out since HH:MM"

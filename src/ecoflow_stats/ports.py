@@ -93,6 +93,13 @@ class SampleStore(Protocol):
         """Return the most recent sample within ``[start, end]``, or ``None``."""
         ...
 
+    def latest_with(
+        self, device_id: int, field: str, before: int, *, limit: int = 1
+    ) -> list[StoredSample]:
+        """The ``limit`` most recent samples strictly before ``before``
+        whose ``field`` is not ``NULL``, newest first."""
+        ...
+
 
 class FailureLog(Protocol):
     """Record of collection attempts that did not produce a sample."""

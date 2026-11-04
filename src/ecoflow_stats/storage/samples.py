@@ -129,6 +129,21 @@ class SampleStore:
         ).fetchone()
         return _row_to_sample(row) if row is not None else None
 
+    def latest_with(
+        self, device_id: int, field: str, before: int, *, limit: int = 1
+    ) -> list[StoredSample]:
+        """The ``limit`` most recent samples strictly before ``before``
+        whose ``field`` is not ``NULL``, newest first -- however far back
+        they are. ``field`` must be one of the ``Reading`` fields."""
+        if field not in FIELD_NAMES:
+            raise ValueError(f"unknown sample field {field!r}")
+        rows = self._conn.execute(
+            f"SELECT * FROM samples WHERE device_id = ? AND ts < ? AND {field} IS NOT NULL"
+            " ORDER BY ts DESC LIMIT ?",
+            (device_id, before, limit),
+        ).fetchall()
+        return [_row_to_sample(row) for row in rows]
+
     def add_batch(
         self,
         device_id: int,

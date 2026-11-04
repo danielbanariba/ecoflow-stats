@@ -161,3 +161,16 @@ def test_overlapping_outages_count_as_one_outage() -> None:
 
     assert result.count == 1
     assert result.total_downtime_s == 3_660
+
+
+def test_the_longest_outage_is_the_longest_merged_outage() -> None:
+    """Overlapping entries are one outage, so the longest outage is the
+    longest merged interval. Pass-1: it stayed the longest single entry,
+    so [0, 600) and [400, 1000) reported one 1000 s outage whose longest
+    was 600 s, shorter than its own mean."""
+    outages = [_outage(0, 600), _outage(400, 1_000, source="legacy")]
+
+    result = compute_aggregates(outages=outages, range_start=0, range_end=10_000, tz=_UTC)
+
+    assert result.count == 1
+    assert result.longest_s == 1_000

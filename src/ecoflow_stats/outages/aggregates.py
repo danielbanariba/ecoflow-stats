@@ -73,12 +73,11 @@ def compute_aggregates(
     Total downtime is the length of the union of the clipped outages:
     time two entries both cover (a gap confirmed as an outage inside a
     detected one, say) counts once, and `count` is the number of merged
-    intervals, so such a pair is one outage. `longest_s` stays per
-    entry.
+    intervals, so such a pair is one outage, and `longest_s` is the
+    longest merged interval.
     """
     zone = ZoneInfo(tz)
     clipped: list[tuple[int, int]] = []
-    longest: int | None = None
     heatmap = [[0] * 24 for _ in range(7)]
 
     for outage in outages:
@@ -87,18 +86,17 @@ def compute_aggregates(
         if clipped_end <= clipped_start:
             continue
 
-        duration = clipped_end - clipped_start
         clipped.append((clipped_start, clipped_end))
-        longest = duration if longest is None else max(longest, duration)
 
         local_start = datetime.fromtimestamp(outage.start_ts, tz=UTC).astimezone(zone)
         heatmap[local_start.weekday()][local_start.hour] += 1
 
     merged = merge_intervals(clipped)
+    durations = [end - start for start, end in merged]
     return OutageAggregates(
         count=len(merged),
-        total_downtime_s=sum(end - start for start, end in merged),
-        longest_s=longest,
+        total_downtime_s=sum(durations),
+        longest_s=max(durations, default=None),
         heatmap=heatmap,
     )
 

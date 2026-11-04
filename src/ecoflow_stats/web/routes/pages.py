@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -225,14 +226,18 @@ def _live_view(
     )
 
 
-def _power_chart_view(ctx: PagesContext, device_id: int) -> PowerChartViewModel:
+def _power_chart_view(ctx: PagesContext, device_id: int, tz: str) -> PowerChartViewModel:
     """The overview's AC-load chart card. The chart itself fetches
     `power/series` client-side; this only builds its source URL and the
     no-JS fallback table. The table's 24 hourly rows end at the next hour
     boundary (so the last row is the current, partial hour) rather than
-    at `now`, which keeps each row on a whole clock hour."""
+    at `now`, which keeps each row on a whole clock hour -- a local one
+    under `tz`, since an offset such as UTC+5:30 is not a whole number
+    of hours."""
     now_ts = int(ctx.now().timestamp())
-    range_end = (now_ts // 3_600 + 1) * 3_600
+    offset = datetime.fromtimestamp(now_ts, tz=ZoneInfo(tz)).utcoffset()
+    offset_s = int(offset.total_seconds()) if offset is not None else 0
+    range_end = ((now_ts + offset_s) // 3_600 + 1) * 3_600 - offset_s
     range_start = range_end - _OVERVIEW_POWER_WINDOW_S
     samples = (
         (row.ts, row.reading) for row in ctx.sample_store.between(device_id, range_start, range_end)
@@ -263,7 +268,7 @@ def overview_page(request: Request, device: int | None = None) -> HTMLResponse:
             "lang": lang,
             "html_lang": html_lang(lang),
             "view": view,
-            "power": _power_chart_view(ctx, selected_id),
+            "power": _power_chart_view(ctx, selected_id, api_ctx.tz),
             "tz": api_ctx.tz,
             "csrf_token": csrf_token(security.app_secret, csrf_cookie),
             "active_nav": "overview",

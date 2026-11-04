@@ -50,13 +50,14 @@ def _never_ticks(application: bootstrap.Application) -> SupervisedTaskHandle:
 
 
 def _build(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, devices: str
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, devices: str, tz: str = "UTC"
 ) -> bootstrap.Application:
     env = {
         "ECOFLOW_ACCESS_KEY": "test-access-key",
         "ECOFLOW_SECRET_KEY": "test-secret-key",
         "ECOFLOW_DEVICES": devices,
         "ECOFLOW_STATS_DATA_DIR": str(tmp_path / "data"),
+        "ECOFLOW_STATS_TZ": tz,
     }
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -462,6 +463,31 @@ def test_the_overview_fallback_table_lists_the_hourly_average_and_peak_of_the_la
         cells = re.findall(r'<td class="num">(.*?)</td>', row.group(1))
         assert cells == ["300", "600"]  # average, peak
         assert "2025-12-31 11:00" not in html
+    finally:
+        application.database.close()
+
+
+def test_the_overview_fallback_table_rows_start_on_a_local_clock_hour(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Each fallback row is one local clock hour. Pass-1: the rows were
+    aligned to UTC hours, so under a half-hour offset (Asia/Kolkata,
+    UTC+5:30) every row ran from :30 to :30 local, and readings from
+    one local hour were split across two rows."""
+    application = _build(monkeypatch, tmp_path, devices="TESTDEV0001", tz="Asia/Kolkata")
+    try:
+        (device,) = application.device_records
+        local_16 = _NOW_TS - 90 * 60  # the fixed clock reads 17:30 IST
+        for offset, watts in ((600, 200.0), (1_200, 600.0), (3_000, 100.0)):
+            application.sample_store.add(device.id, local_16 + offset, 1, Reading(ac_out_w=watts))
+        application.database.writer.commit()
+
+        html = _overview_html(application)
+
+        row = re.search(r"<tr>\s*<td>2026-01-01 16:00</td>(.*?)</tr>", html, re.DOTALL)
+        assert row is not None
+        cells = re.findall(r'<td class="num">(.*?)</td>', row.group(1))
+        assert cells == ["300", "600"]  # average, peak
     finally:
         application.database.close()
 

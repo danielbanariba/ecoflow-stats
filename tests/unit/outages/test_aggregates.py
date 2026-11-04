@@ -174,3 +174,33 @@ def test_the_longest_outage_is_the_longest_merged_outage() -> None:
 
     assert result.count == 1
     assert result.longest_s == 1_000
+
+
+def test_the_heatmap_counts_one_start_per_merged_outage() -> None:
+    """A gap confirmed as an outage inside a detected one is one outage
+    with one start. Pass-1: each entry added its own start, so the pair
+    put 2 in the heatmap for a single real outage."""
+    outages = [
+        _outage(60, 3_720, source="detected"),
+        _outage(600, 3_660, source="gap", start_uncertain=True, end_uncertain=True),
+    ]
+
+    result = compute_aggregates(outages=outages, range_start=0, range_end=10_000, tz=_UTC)
+
+    assert sum(map(sum, result.heatmap)) == 1
+    assert result.heatmap[3][0] == 1  # Thursday 1970-01-01, 00:01 UTC
+
+
+def test_a_merged_outage_starts_at_its_earliest_entrys_own_start() -> None:
+    """The heatmap bins an outage by its real (unclipped) start; merging
+    must keep that. Pass-2: binning a merged outage by its clipped start
+    would move this Wednesday 23:00 outage to Thursday 00:00."""
+    outages = [
+        _outage(-3_600, 600, source="detected"),
+        _outage(100, 500, source="gap", start_uncertain=True, end_uncertain=True),
+    ]
+
+    result = compute_aggregates(outages=outages, range_start=0, range_end=10_000, tz=_UTC)
+
+    assert sum(map(sum, result.heatmap)) == 1
+    assert result.heatmap[2][23] == 1

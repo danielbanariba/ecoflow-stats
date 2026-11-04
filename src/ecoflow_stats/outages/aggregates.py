@@ -65,10 +65,11 @@ def compute_aggregates(
 
     An ongoing outage (`end_ts is None`) is clipped at `range_end`, never
     treated as having already ended; an outage entirely outside
-    `[range_start, range_end]` contributes nothing. The heatmap bins use
-    each outage's own (unclipped) start time, converted to the local
-    calendar in `tz` -- clipping only affects the downtime totals, never
-    which cell a start time falls into.
+    `[range_start, range_end]` contributes nothing. The heatmap bins
+    each merged outage once, at the earliest own (unclipped) start time
+    among the entries it merged, converted to the local calendar in
+    `tz` -- clipping only affects the downtime totals, never which cell
+    a start time falls into.
 
     Total downtime is the length of the union of the clipped outages:
     time two entries both cover (a gap confirmed as an outage inside a
@@ -77,7 +78,7 @@ def compute_aggregates(
     longest merged interval.
     """
     zone = ZoneInfo(tz)
-    clipped: list[tuple[int, int]] = []
+    clipped: list[tuple[int, int, int]] = []  # (clipped start, clipped end, own start_ts)
     heatmap = [[0] * 24 for _ in range(7)]
 
     for outage in outages:
@@ -85,13 +86,20 @@ def compute_aggregates(
         clipped_end = min(outage.end_ts if outage.end_ts is not None else range_end, range_end)
         if clipped_end <= clipped_start:
             continue
+        clipped.append((clipped_start, clipped_end, outage.start_ts))
 
-        clipped.append((clipped_start, clipped_end))
-
-        local_start = datetime.fromtimestamp(outage.start_ts, tz=UTC).astimezone(zone)
+    merged = merge_intervals([(start, end) for start, end, _own_start in clipped])
+    for merged_start, merged_end in merged:
+        # One start per merged outage: the earliest real start among the
+        # entries it merged, unclipped like every other heatmap start.
+        first_start = min(
+            own_start
+            for start, end, own_start in clipped
+            if merged_start <= start and end <= merged_end
+        )
+        local_start = datetime.fromtimestamp(first_start, tz=UTC).astimezone(zone)
         heatmap[local_start.weekday()][local_start.hour] += 1
 
-    merged = merge_intervals(clipped)
     durations = [end - start for start, end in merged]
     return OutageAggregates(
         count=len(merged),

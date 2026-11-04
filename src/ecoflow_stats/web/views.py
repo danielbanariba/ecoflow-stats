@@ -24,6 +24,7 @@ from ecoflow_stats.battery.stats import (
     soc_history,
     summarize_battery_trend,
 )
+from ecoflow_stats.outages.aggregates import merge_intervals
 from ecoflow_stats.power.series import ac_load_series
 from ecoflow_stats.timeutil import (
     day_bounds,
@@ -319,31 +320,52 @@ def build_mains_strip_segments(
     )
 
 
-def _sum_clipped_duration(entries: Sequence[Gap], range_start: int, range_end: int) -> int:
+def _sum_clipped_duration(
+    entries: Sequence[Gap],
+    range_start: int,
+    range_end: int,
+    *,
+    covered: Sequence[tuple[int, int]] = (),
+) -> int:
+    """Clipped length of `entries`, minus any part of them that falls
+    inside one of the merged, non-overlapping `covered` intervals."""
     total = 0
     for entry in entries:
         clipped = _clip(entry.start_ts, entry.end_ts, range_start, range_end)
         if clipped is not None:
             total += clipped[1] - clipped[0]
+            for cover_start, cover_end in covered:
+                total -= max(0, min(clipped[1], cover_end) - max(clipped[0], cover_start))
     return total
 
 
 def build_outages_summary(
     *,
     aggregates: OutageAggregates,
+    outages: Sequence[EffectiveOutage],
     briefs: Sequence[EffectiveOutage],
     gaps: Sequence[Gap],
     range_start: int,
     range_end: int,
 ) -> OutagesSummary:
+    """`unknown_time_s` leaves out any gap time a detected outage covers:
+    that silence already counts as downtime through the outage."""
     mean_s = aggregates.total_downtime_s // aggregates.count if aggregates.count else None
+    detected = merge_intervals(
+        [
+            clipped
+            for outage in outages
+            if outage.source == "detected"
+            and (clipped := _clip(outage.start_ts, outage.end_ts, range_start, range_end))
+        ]
+    )
     return OutagesSummary(
         count=aggregates.count,
         total_downtime_s=aggregates.total_downtime_s,
         longest_s=aggregates.longest_s,
         mean_s=mean_s,
         brief_count=len(briefs),
-        unknown_time_s=_sum_clipped_duration(gaps, range_start, range_end),
+        unknown_time_s=_sum_clipped_duration(gaps, range_start, range_end, covered=detected),
     )
 
 
@@ -469,6 +491,7 @@ def build_outages_view_model(
         range_end=range_end,
         summary=build_outages_summary(
             aggregates=aggregates,
+            outages=outages,
             briefs=briefs,
             gaps=gaps,
             range_start=range_start,

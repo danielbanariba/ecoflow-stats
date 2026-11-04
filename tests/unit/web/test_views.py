@@ -400,6 +400,7 @@ def test_outages_summary_reports_count_total_longest_mean_brief_and_unknown_time
 
     summary = build_outages_summary(
         aggregates=aggregates,
+        outages=[],
         briefs=briefs,
         gaps=gaps,
         range_start=_RANGE_START,
@@ -414,6 +415,29 @@ def test_outages_summary_reports_count_total_longest_mean_brief_and_unknown_time
     assert summary.unknown_time_s == 300
 
 
+def test_outages_summary_counts_only_the_part_of_a_gap_no_detected_outage_covers() -> None:
+    """Pass-1: a gap overlapping a detected outage added its whole length
+    to unknown time, though the overlap already counts as downtime. A
+    confirmed-gap outage is no cover: its time is the gap itself."""
+    aggregates = OutageAggregates(count=2, total_downtime_s=1_400, longest_s=1_400)
+    gaps = [_gap(_RANGE_START, _RANGE_START + 1_000)]
+    outages = [
+        _outage(_RANGE_START + 600, _RANGE_START + 2_000),
+        _outage(_RANGE_START, _RANGE_START + 1_000, source="gap"),
+    ]
+
+    summary = build_outages_summary(
+        aggregates=aggregates,
+        outages=outages,
+        briefs=[],
+        gaps=gaps,
+        range_start=_RANGE_START,
+        range_end=_RANGE_END,
+    )
+
+    assert summary.unknown_time_s == 600
+
+
 def test_outages_summary_reports_mean_and_longest_as_unavailable_with_no_outages() -> None:
     """Pass-1: dividing by a zero count must never crash, and a 0-second
     mean would dishonestly imply a real measured zero duration rather
@@ -421,7 +445,12 @@ def test_outages_summary_reports_mean_and_longest_as_unavailable_with_no_outages
     aggregates = OutageAggregates(count=0, total_downtime_s=0, longest_s=None)
 
     summary = build_outages_summary(
-        aggregates=aggregates, briefs=[], gaps=[], range_start=_RANGE_START, range_end=_RANGE_END
+        aggregates=aggregates,
+        outages=[],
+        briefs=[],
+        gaps=[],
+        range_start=_RANGE_START,
+        range_end=_RANGE_END,
     )
 
     assert summary.mean_s is None

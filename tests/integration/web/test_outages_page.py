@@ -172,6 +172,33 @@ def test_the_page_renders_the_outage_summary(
         application.database.close()
 
 
+def test_unknown_time_leaves_out_a_gap_a_detected_outage_covers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A silence inside a detected outage already counts as downtime.
+    Pass-1: the summary also reported it as unknown time, so the page
+    showed "1 h 3 min" unknown where only the separate 222 s gap
+    was unaccounted for."""
+    outage_start = _RANGE_START + 1_000
+    application, _device_id, client = _client(
+        monkeypatch,
+        tmp_path,
+        events=[_event(outage_start, outage_start + 3_660, readings=3)],
+        gaps=[
+            _gap(outage_start, outage_start + 3_600, state_before="absent", state_after="absent"),
+            _gap(_RANGE_START + 10_000, _RANGE_START + 10_222),
+        ],
+    )
+    try:
+        with client:
+            response = client.get("/outages")
+
+        assert response.status_code == 200
+        assert _dd_value(response.text, "Unknown time") == "3 min 42 s"
+    finally:
+        application.database.close()
+
+
 def test_the_summary_reports_unavailable_mean_and_longest_with_no_outages(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

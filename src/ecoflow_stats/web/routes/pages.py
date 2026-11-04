@@ -211,6 +211,7 @@ def _live_view(
     )
     outages_30d = build_outages_summary(
         aggregates=aggregates,
+        outages=resolved.outages,
         briefs=resolved.briefs,
         gaps=gaps,
         range_start=range_start,

@@ -74,6 +74,8 @@
           {{ t('energy.insight.no_tariff') }}
         {% elif view.best_day is not none %}
           {{ t('energy.insight.best_day').format(period=format_period_label(view.best_day.period, view.granularity, t), cost=("%.2f"|format(view.best_day.cost)), currency=view.currency) }}
+        {% elif view.periods %}
+          {{ t('energy.insight.no_complete_period') }}
         {% else %}
           {{ t('energy.insight.no_data') }}
         {% endif %}

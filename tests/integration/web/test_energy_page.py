@@ -291,6 +291,34 @@ def test_the_energy_page_never_crowns_the_partial_first_day_as_cheapest(
         application.database.close()
 
 
+def test_the_energy_caption_does_not_claim_no_data_when_no_period_is_complete(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """With data in range but no complete period to rank (only today's,
+    still in progress), there is no cheapest period to name. Pass-1: the
+    caption then said "No energy data recorded in this range yet." while
+    the table below listed today's energy."""
+    application, device_id, client = _client(
+        monkeypatch,
+        tmp_path,
+        tariff=0.20,
+        currency="USD",
+        rollups=[_energy_row("2026-01-09", chg_ac_wh=500.0)],  # today, in progress
+    )
+    try:
+        SampleStore(application.database.writer).add(
+            device_id, int(datetime(2026, 1, 1, tzinfo=UTC).timestamp()), 1, Reading(soc=80)
+        )
+        application.database.writer.commit()
+        with client:
+            html = client.get("/energy").text
+
+        assert "No energy data recorded in this range yet." not in html
+        assert "No complete period in this range to compare yet." in html
+    finally:
+        application.database.close()
+
+
 def test_unknown_device_on_the_energy_page_returns_a_404_page(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

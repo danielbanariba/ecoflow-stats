@@ -189,6 +189,7 @@
   "energy.flags.gap_prorated": "Estimación prorrateada por vacío",
   "energy.insight.best_day": "{period} fue el período más económico en este rango, con {cost} {currency}.",
   "energy.insight.no_tariff": "Configure una tarifa para ver qué período costó más.",
+  "energy.insight.no_complete_period": "Todavía no hay un período completo en este rango para comparar.",
   "energy.insight.no_data": "Todavía no se registraron datos de energía en este rango.",
   "energy.period.day_month_year": "{day} {month} {year}",
   "energy.period.month_year": "{month} {year}",

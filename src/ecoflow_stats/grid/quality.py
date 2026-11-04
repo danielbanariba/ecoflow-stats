@@ -104,9 +104,12 @@ def grid_quality_range(
     present_count = 0
     for _ts, reading in ordered:
         judgment = judge(reading, window, config=config)
-        window.append(reading)
-        if len(window) > config.stale_repeat - 1:
-            window.pop(0)
+        # Judged readings only, exactly like `outages.detector.detect`'s
+        # own window, so both agree on which rows are stale repeats.
+        if judgment.state != "unjudged":
+            window.append(reading)
+            if len(window) > config.stale_repeat - 1:
+                window.pop(0)
         if judgment.state != "present":
             continue
         present_count += 1

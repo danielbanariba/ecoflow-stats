@@ -35,7 +35,13 @@ def get_status(
     previous = []
     if latest is not None:
         window_start = latest.ts - poll_interval_s * config.stale_repeat
-        rows = list(sample_store.between(device_id, window_start, latest.ts - 1))
+        # A reading with no voltage is never judged, so the detector's
+        # own stale-payload window never holds one; skip it here too.
+        rows = [
+            row
+            for row in sample_store.between(device_id, window_start, latest.ts - 1)
+            if row.reading.grid_v is not None
+        ]
         tail = rows[-(config.stale_repeat - 1) :] if config.stale_repeat > 1 else []
         previous = [row.reading for row in tail]
 

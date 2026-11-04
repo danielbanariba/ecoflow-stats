@@ -96,3 +96,25 @@ def test_a_null_voltage_sample_is_excluded_and_does_not_pull_the_minimum_toward_
     assert isinstance(result, GridRange)
     assert result.grid_v_min == 118.0
     assert result.readings == 2
+
+
+def test_a_repeated_payload_across_a_missing_voltage_reading_is_excluded_like_the_detector() -> (
+    None
+):
+    """`grid_quality_range` reuses the detector's stale-payload rule,
+    whose window holds judged readings only. Pass-1: the window also
+    took in the unjudgeable (no-voltage) reading, so the third identical
+    judged row was counted as grid-present here while the outage
+    detector judged the same row `UNJUDGED('stale_payload')`."""
+    repeated = _reading(grid_v=120.0, grid_hz=60.0, soc=80)
+    samples = [
+        (0, repeated),
+        (60, repeated),
+        (120, _reading(soc=80)),
+        (180, repeated),
+    ]
+
+    result = grid_quality_range(samples)
+
+    assert isinstance(result, GridRange)
+    assert result.readings == 2

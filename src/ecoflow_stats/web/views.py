@@ -920,10 +920,11 @@ class GridViewModel:
     highest_hz: float | None
     days_with_data: int
     days_analyzed: int
-    """The count of rollup rows read for this range -- not an actual
-    calendar-day span -- labelled plainly on the page as "days
-    analyzed" rather than claiming calendar-day coverage this never
-    computed."""
+    """The count of rollup rows read for this range that hold samples
+    -- not an actual calendar-day span, and never a day inside a
+    collection gap that only has a row for its prorated energy --
+    labelled plainly on the page as "days analyzed" rather than
+    claiming calendar-day coverage this never computed."""
     series_src: str
 
 
@@ -974,7 +975,7 @@ def build_grid_view_model(
         lowest_hz=lowest_hz,
         highest_hz=highest_hz,
         days_with_data=len(present_rows),
-        days_analyzed=len(daily_rows),
+        days_analyzed=sum(1 for row in rows if row.samples > 0),
         series_src=series_src,
     )
 

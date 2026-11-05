@@ -1067,6 +1067,7 @@ def _grid_row(
     grid_hz_avg: float | None = None,
     grid_hz_max: float | None = None,
     grid_readings: int = 0,
+    samples: int = 1,
 ) -> DailyGridRollup:
     return DailyGridRollup(
         device_id=1,
@@ -1078,6 +1079,7 @@ def _grid_row(
         grid_hz_avg=grid_hz_avg,
         grid_hz_max=grid_hz_max,
         grid_readings=grid_readings,
+        samples=samples,
     )
 
 

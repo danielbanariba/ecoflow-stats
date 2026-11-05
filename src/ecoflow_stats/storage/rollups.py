@@ -114,6 +114,9 @@ class DailyGridRollup:
     grid_hz_avg: float | None
     grid_hz_max: float | None
     grid_readings: int
+    samples: int
+    """How many samples the day holds -- ``0`` for a day that only has a
+    rollup row for the energy a collection gap prorated onto it."""
 
 
 def _row_to_grid_rollup(row: sqlite3.Row) -> DailyGridRollup:
@@ -127,6 +130,7 @@ def _row_to_grid_rollup(row: sqlite3.Row) -> DailyGridRollup:
         grid_hz_avg=row["grid_hz_avg"],
         grid_hz_max=row["grid_hz_max"],
         grid_readings=row["grid_readings"],
+        samples=row["samples"],
     )
 
 
@@ -308,7 +312,7 @@ class RollupStore:
         (`web.routes.api`'s `grid/daily` route, task 20.3's API half)."""
         rows = self._conn.execute(
             "SELECT device_id, day, grid_v_min, grid_v_avg, grid_v_max,"
-            " grid_hz_min, grid_hz_avg, grid_hz_max, grid_readings"
+            " grid_hz_min, grid_hz_avg, grid_hz_max, grid_readings, samples"
             " FROM daily_rollups WHERE device_id = ? AND day BETWEEN ? AND ? ORDER BY day",
             (device_id, start_day, end_day),
         ).fetchall()

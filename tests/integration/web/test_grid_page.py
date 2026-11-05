@@ -78,6 +78,8 @@ def _client(
     rollup_store = RollupStore(application.database.writer)
     for row in rollups or []:
         rollup_store.upsert_grid(device.id, **row)  # type: ignore[arg-type]
+        # A hand-seeded grid row stands for a day that held samples.
+        rollup_store.upsert_samples(device.id, row["day"], samples=1)  # type: ignore[arg-type]
     application.database.writer.commit()
     app = create_app(
         application,
@@ -198,6 +200,48 @@ def test_the_grid_page_shows_a_no_data_day_as_unavailable_not_a_fabricated_range
         # a fabricated reading.
         assert ">0.0 V<" not in html
         assert ">0 V<" not in html
+    finally:
+        application.database.close()
+
+
+def test_days_analyzed_counts_only_days_that_have_samples(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A day inside a collection gap has a rollup row (its prorated
+    energy) but no sample, so nothing about its grid was analyzed.
+    Pass-1: the page counted every rollup row, reporting "3 of 4" days
+    with data here where three days held samples and all three had a
+    grid reading."""
+    from ecoflow_stats.devices.reading import Reading
+    from ecoflow_stats.rollups.service import derive_rollups
+    from ecoflow_stats.storage.derivations import DerivationStore
+    from ecoflow_stats.storage.samples import SampleStore
+
+    def ts(day: int, hour: int = 12) -> int:
+        return int(datetime(2026, 1, day, hour, tzinfo=UTC).timestamp())
+
+    application, device_id, client = _client(monkeypatch, tmp_path)
+    try:
+        writer = application.database.writer
+        sample_store = SampleStore(writer)
+        sample_store.add(device_id, ts(2), 1, Reading(grid_v=120.0, chg_ac_wh=0.0))
+        sample_store.add(device_id, ts(4), 1, Reading(grid_v=121.0, chg_ac_wh=480.0))  # 48 h
+        sample_store.add(device_id, ts(5), 1, Reading(grid_v=122.0, chg_ac_wh=500.0))
+        writer.commit()
+        writer.execute("BEGIN IMMEDIATE")
+        derive_rollups(
+            device_id,
+            sample_store=sample_store,
+            rollup_store=RollupStore(writer),
+            derivation_store=DerivationStore(writer),
+            now=datetime.fromtimestamp(_NOW_TS, tz=UTC),
+        )
+        writer.commit()
+
+        with client:
+            html = client.get("/grid", params={"from": ts(2, 0), "to": ts(5, 23)}).text
+
+        assert "<dd>3 of 3</dd>" in html
     finally:
         application.database.close()
 

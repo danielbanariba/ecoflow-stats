@@ -65,7 +65,8 @@ if TYPE_CHECKING:
     from ecoflow_stats.storage.rollups import RollupStore
 
 _DERIVATION_NAME = "rollups"
-_ROLLUP_VERSION = 1
+_ROLLUP_VERSION = 2
+"""2: rows record their day's sample count (`samples`)."""
 _DEFAULT_CONFIG = DetectorConfig()
 
 _ENERGY_FLAG_BITS: dict[str, int] = {"counter_reset": 1, "implausible_jump": 2, "gap_prorated": 4}
@@ -298,6 +299,7 @@ def derive_rollups(
     for day, day_samples in samples_by_day.items():
         if day_samples[0][0] < lower:
             continue  # queried only for its energy columns, see above
+        rollup_store.upsert_samples(device_id, day, samples=len(day_samples))
         soc_min, soc_max, cycles_last, soh_last, batt_temp_max = _daily_battery_fields(day_samples)
         rollup_store.upsert(
             device_id,

@@ -694,13 +694,14 @@ def test_a_version_change_forces_a_full_recompute_even_without_a_dirty_mark(
     env.insert(device_id, [(0, _reading(soc=90))])
     assert env.derive(device_id) is True
 
-    monkeypatch.setattr(rollups_service, "_ROLLUP_VERSION", 2)
+    bumped = rollups_service._ROLLUP_VERSION + 1
+    monkeypatch.setattr(rollups_service, "_ROLLUP_VERSION", bumped)
 
     ran = env.derive(device_id, now=datetime(2026, 10, 6, 1, tzinfo=UTC))
 
     assert ran is True
     row = DerivationStore(env.writer).get(device_id, "rollups")
-    assert row is not None and row.version == 2
+    assert row is not None and row.version == bumped
 
 
 # --- derive_rollups: configured detector thresholds (DATA-01, JOB-01) ------

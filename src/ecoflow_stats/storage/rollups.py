@@ -44,6 +44,9 @@ class DailyRollup:
     cycles_last: int | None
     soh_last: float | None
     batt_temp_max: float | None
+    samples: int
+    """How many samples the day holds -- ``0`` for a day that only has a
+    rollup row for the energy a collection gap prorated onto it."""
 
 
 def _row_to_rollup(row: sqlite3.Row) -> DailyRollup:
@@ -55,6 +58,7 @@ def _row_to_rollup(row: sqlite3.Row) -> DailyRollup:
         cycles_last=row["cycles_last"],
         soh_last=row["soh_last"],
         batt_temp_max=row["batt_temp_max"],
+        samples=row["samples"],
     )
 
 
@@ -168,6 +172,15 @@ class RollupStore:
             (device_id, day, soc_min, soc_max, cycles_last, soh_last, batt_temp_max),
         )
 
+    def upsert_samples(self, device_id: int, day: str, *, samples: int) -> None:
+        """Insert or replace one day's sample count, touching only that
+        column -- the same column-scoped contract as `upsert`."""
+        self._conn.execute(
+            "INSERT INTO daily_rollups (device_id, day, samples) VALUES (?, ?, ?)"
+            " ON CONFLICT (device_id, day) DO UPDATE SET samples = excluded.samples",
+            (device_id, day, samples),
+        )
+
     def upsert_energy(
         self,
         device_id: int,
@@ -270,7 +283,8 @@ class RollupStore:
         """Return one device's rollup row for ``day``, or ``None`` if it
         has never been computed."""
         row = self._conn.execute(
-            "SELECT device_id, day, soc_min, soc_max, cycles_last, soh_last, batt_temp_max"
+            "SELECT device_id, day, soc_min, soc_max, cycles_last, soh_last, batt_temp_max,"
+            " samples"
             " FROM daily_rollups WHERE device_id = ? AND day = ?",
             (device_id, day),
         ).fetchone()
@@ -280,7 +294,8 @@ class RollupStore:
         """Return a device's rollup rows within ``[start_day, end_day]``
         (inclusive, ``'YYYY-MM-DD'`` strings), in day order."""
         rows = self._conn.execute(
-            "SELECT device_id, day, soc_min, soc_max, cycles_last, soh_last, batt_temp_max"
+            "SELECT device_id, day, soc_min, soc_max, cycles_last, soh_last, batt_temp_max,"
+            " samples"
             " FROM daily_rollups WHERE device_id = ? AND day BETWEEN ? AND ? ORDER BY day",
             (device_id, start_day, end_day),
         ).fetchall()

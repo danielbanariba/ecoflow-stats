@@ -101,6 +101,8 @@ def _client(
     rollup_store = RollupStore(application.database.writer)
     for row in rollups or []:
         rollup_store.upsert(device.id, **row)  # type: ignore[arg-type]
+        # A hand-seeded trend row stands for a day that held samples.
+        rollup_store.upsert_samples(device.id, row["day"], samples=1)  # type: ignore[arg-type]
     application.database.writer.commit()
     app = create_app(
         application,
@@ -440,6 +442,52 @@ def test_the_trend_caption_reports_the_batterys_real_change_not_a_static_placeho
 
         assert "down 1.5 points" in html
         assert "5 more cycles" in html
+    finally:
+        application.database.close()
+
+
+def test_the_trend_caption_compares_the_first_and_last_days_with_samples(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A day inside a collection gap has a rollup row (its prorated
+    energy) but no sample. It stays listed as unavailable, but the
+    caption must compare the first and last days that have samples.
+    Pass-1: the range here starts on such a day, so the caption compared
+    its missing state of health and reported "not enough history"."""
+    from datetime import UTC, datetime
+
+    from ecoflow_stats.rollups.service import derive_rollups
+    from ecoflow_stats.storage.derivations import DerivationStore
+
+    def ts(day: int, hour: int = 12) -> int:
+        return int(datetime(2026, 1, day, hour, tzinfo=UTC).timestamp())
+
+    application, _device_id, client = _client(
+        monkeypatch,
+        tmp_path,
+        samples=[
+            (ts(2), Reading(soh=99.0, cycles=10, chg_ac_wh=0.0)),
+            (ts(4), Reading(soh=98.0, cycles=11, chg_ac_wh=480.0)),  # 48 h later
+            (ts(5), Reading(soh=97.0, cycles=12, chg_ac_wh=500.0)),
+        ],
+    )
+    try:
+        writer = application.database.writer
+        writer.execute("BEGIN IMMEDIATE")
+        derive_rollups(
+            application.device_records[0].id,
+            sample_store=SampleStore(writer),
+            rollup_store=RollupStore(writer),
+            derivation_store=DerivationStore(writer),
+            now=datetime.fromtimestamp(_NOW_TS, tz=UTC),
+        )
+        writer.commit()
+
+        with client:
+            html = client.get("/battery", params={"from": ts(3, 0), "to": ts(5, 23)}).text
+
+        assert "<td>2026-01-03</td>" in html  # the no-sample day is still listed
+        assert "State of health is down 1.0 points over this range." in html
     finally:
         application.database.close()
 

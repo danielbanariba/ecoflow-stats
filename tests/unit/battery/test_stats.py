@@ -172,6 +172,7 @@ def test_battery_trend_reflects_the_devices_own_progression_in_day_order() -> No
             soc_min=40,
             soc_max=90,
             batt_temp_max=28.0,
+            samples=1,
         ),
         DailyBatteryTrend(
             day="2026-10-01",
@@ -180,6 +181,7 @@ def test_battery_trend_reflects_the_devices_own_progression_in_day_order() -> No
             soc_min=50,
             soc_max=95,
             batt_temp_max=26.0,
+            samples=1,
         ),
     ]
 
@@ -253,6 +255,7 @@ def test_summarize_battery_trend_reports_the_change_from_the_first_to_the_last_d
             soc_min=20,
             soc_max=95,
             batt_temp_max=25.0,
+            samples=1,
         ),
         DailyBatteryTrend(
             day="2026-01-02",
@@ -261,6 +264,7 @@ def test_summarize_battery_trend_reports_the_change_from_the_first_to_the_last_d
             soc_min=15,
             soc_max=90,
             batt_temp_max=26.0,
+            samples=1,
         ),
         DailyBatteryTrend(
             day="2026-01-07",
@@ -269,6 +273,7 @@ def test_summarize_battery_trend_reports_the_change_from_the_first_to_the_last_d
             soc_min=10,
             soc_max=88,
             batt_temp_max=27.0,
+            samples=1,
         ),
     ]
 
@@ -286,6 +291,7 @@ def test_summarize_battery_trend_reports_steady_when_soh_is_unchanged() -> None:
             soc_min=20,
             soc_max=95,
             batt_temp_max=25.0,
+            samples=1,
         ),
         DailyBatteryTrend(
             day="2026-01-07",
@@ -294,6 +300,7 @@ def test_summarize_battery_trend_reports_steady_when_soh_is_unchanged() -> None:
             soc_min=20,
             soc_max=95,
             batt_temp_max=25.0,
+            samples=1,
         ),
     ]
 
@@ -318,6 +325,7 @@ def test_summarize_battery_trend_is_unavailable_with_fewer_than_two_days_or_miss
             soc_min=20,
             soc_max=95,
             batt_temp_max=25.0,
+            samples=1,
         )
     ]
     assert summarize_battery_trend(one_day) == BatteryTrendInsight(
@@ -332,6 +340,7 @@ def test_summarize_battery_trend_is_unavailable_with_fewer_than_two_days_or_miss
             soc_min=20,
             soc_max=95,
             batt_temp_max=25.0,
+            samples=1,
         ),
         DailyBatteryTrend(
             day="2026-01-07",
@@ -340,6 +349,7 @@ def test_summarize_battery_trend_is_unavailable_with_fewer_than_two_days_or_miss
             soc_min=15,
             soc_max=90,
             batt_temp_max=26.0,
+            samples=1,
         ),
     ]
     assert summarize_battery_trend(missing_boundary) == BatteryTrendInsight(

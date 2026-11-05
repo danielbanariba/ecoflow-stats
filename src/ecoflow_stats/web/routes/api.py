@@ -525,6 +525,7 @@ def battery_trends_route(
             soc_min=row.soc_min,
             soc_max=row.soc_max,
             batt_temp_max=row.batt_temp_max,
+            samples=row.samples,
         )
         for row in rollup_rows
     ]

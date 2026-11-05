@@ -47,6 +47,9 @@ class DailyBatteryTrend:
     soc_min: int | None
     soc_max: int | None
     batt_temp_max: float | None
+    samples: int
+    """How many samples the day holds; ``0`` for a day inside a
+    collection gap, listed but never a trend boundary."""
 
 
 def charge_history(samples: Sequence[tuple[int, Reading]]) -> list[ChargePoint]:
@@ -226,11 +229,13 @@ class BatteryTrendInsight:
 
 
 def summarize_battery_trend(days: Sequence[DailyBatteryTrend]) -> BatteryTrendInsight:
-    """Compare the retained rollup history's first and last day (by
-    `battery_trend`'s own day-ordering) -- no new query, no smoothing,
-    no estimation beyond what the two boundary days themselves report.
+    """Compare the retained rollup history's first and last day that
+    hold samples (by `battery_trend`'s own day-ordering) -- no new
+    query, no smoothing, no estimation beyond what the two boundary
+    days themselves report. A day without samples (inside a collection
+    gap) is never a boundary.
     """
-    ordered = battery_trend(days)
+    ordered = [day for day in battery_trend(days) if day.samples > 0]
     if len(ordered) < 2:
         return BatteryTrendInsight(soh_delta=None, soh_direction=None, cycles_delta=None)
 
